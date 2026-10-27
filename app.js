@@ -46,7 +46,19 @@ function normalize(d) {
 
 // ---------- Utilitários ----------
 const uid = () => (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(16).slice(2));
-const eur = n => new Intl.NumberFormat('pt-PT', { style: 'currency', currency: 'EUR' }).format(n);
+const VERSION = 'v8';
+const fmtEur = new Intl.NumberFormat('pt-PT', { style: 'currency', currency: 'EUR' });
+// Modo privado: valores escondidos até tocares no olho (volta a esconder sozinho). Protege o seletor de apps do iOS.
+const PRIVKEY = 'poupanca-privacy', REVEAL_MS = 20000;
+let reveal = false, revealTimer = null;
+const privacyOn = () => { try { return localStorage.getItem(PRIVKEY) !== '0'; } catch (e) { return true; } };
+const masked = () => privacyOn() && !reveal;
+const eur = n => (masked() ? '••••' : fmtEur.format(n));
+function setReveal(on) {
+  reveal = on; clearTimeout(revealTimer);
+  if (on) revealTimer = setTimeout(() => setReveal(false), REVEAL_MS);
+  render(true);
+}
 const ymd = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 const today = () => ymd(new Date());
 const parseD = s => new Date(s + 'T12:00:00');
@@ -209,6 +221,7 @@ const $ = id => document.getElementById(id);
 function render(keepScroll) {
   $('tabs').innerHTML = TABS.map(([k, l, i]) => `<button data-tab="${k}" class="${k === tab ? 'on' : ''}"><span>${i}</span>${l}</button>`).join('');
   $('title').textContent = tab === 'home' ? 'Poupança' : TABS.find(t => t[0] === tab)[1];
+  $('eye').hidden = !privacyOn(); $('eye').textContent = reveal ? '🙈' : '👁️';
   $('add').hidden = tab === 'home' || (tab === 'entries' && !db.accounts.length);
   $('view').innerHTML = { home, entries, budgets, goals, accounts }[tab]();
   if (!keepScroll) window.scrollTo(0, 0);
@@ -333,8 +346,10 @@ function accounts() {
   <h2>Cópia de segurança</h2><div class="card"><p class="sub" style="margin-top:0">Os dados ficam só neste telemóvel. Exporta uma cópia todos os meses e guarda o ficheiro no iCloud ou nos Ficheiros.</p>
   <div class="alert ${backupStatus().tone}" style="margin:8px 0 0">${backupStatus().icon} ${backupStatus().text}</div>
   <div class="btns" style="margin-top:8px"><button class="btn" data-act="export">Exportar</button><button class="btn" data-act="import">Importar</button></div></div><input id="file" type="file" accept=".json,application/json" hidden>
-  <h2>Segurança</h2><div class="card"><p class="sub" style="margin-top:0">${getPin() ? '🔒 PIN ativo. A app bloqueia ao abrir e depois de 30 segundos fora dela.' : 'Protege a app com um PIN de 6 dígitos. É um bloqueio de ecrã: impede que outra pessoa abra a app no teu telemóvel.'}</p>
-  <div class="btns" style="margin-top:8px">${getPin() ? '<button class="btn" data-act="pin-change">Alterar PIN</button><button class="btn del" data-act="pin-remove">Remover PIN</button>' : '<button class="btn main" data-act="pin-set">Definir PIN</button>'}</div></div>`;
+  <h2>Segurança</h2><div class="card"><div class="between" style="margin-bottom:10px"><div><b>Modo privado</b><div class="sub">Esconde os valores (••••) até tocares no 👁️. Volta a esconder passados 20 s ou ao sair da app.</div></div><button class="btn ${privacyOn() ? 'main' : ''}" data-act="privacy" style="flex:none;padding:8px 14px">${privacyOn() ? 'Ligado' : 'Desligado'}</button></div>
+  <div style="border-top:1px solid var(--line);padding-top:10px"></div><p class="sub" style="margin-top:0">${getPin() ? '🔒 PIN ativo. A app bloqueia ao abrir e depois de 30 segundos fora dela.' : 'Protege a app com um PIN de 6 dígitos. É um bloqueio de ecrã: impede que outra pessoa abra a app no teu telemóvel.'}</p>
+  <div class="btns" style="margin-top:8px">${getPin() ? '<button class="btn" data-act="pin-change">Alterar PIN</button><button class="btn del" data-act="pin-remove">Remover PIN</button>' : '<button class="btn main" data-act="pin-set">Definir PIN</button>'}</div></div>
+  <p class="note" style="text-align:center">Poupança ${VERSION}</p>`;
 }
 function recurringView() {
   const up = upcoming(plusDays(30)), out = up.filter(u => u.rec.kind === 'expense').reduce((s, u) => s + u.rec.amount, 0), inn = up.filter(u => u.rec.kind === 'income').reduce((s, u) => s + u.rec.amount, 0);
@@ -506,7 +521,8 @@ document.addEventListener('click', ev => {
   const t = ev.target.closest('button, b[data-edit-goal]');
   if (!t) { if (ev.target.id === 'sheet-bg') closeSheet(); return; }
   const d = t.dataset, add = () => ({ entries: entryForm, budgets: budgetForm, goals: goalForm, accounts: () => ({ accounts: accountForm, rec: recForm, inv: invForm }[ui.seg])() }[tab])();
-  if (d.tab) go(d.tab);
+  if (t.id === 'eye') setReveal(!reveal);
+  else if (d.tab) go(d.tab);
   else if (t.id === 'add') add();
   else if (d.quick) entryForm(null, d.quick);
   else if (d.seg) { ui.seg = d.seg; render(true); }
@@ -528,6 +544,7 @@ document.addEventListener('click', ev => {
   else if (d.act === 'pin-change') showLock('verify', () => showLock('set1', () => render(true)));
   else if (d.act === 'pin-remove') showLock('verify', () => { localStorage.removeItem(PINKEY); render(true); });
   else if (d.act === 'pin-cancel') hideLock();
+  else if (d.act === 'privacy') { try { localStorage.setItem(PRIVKEY, privacyOn() ? '0' : '1'); } catch (e) {} reveal = false; render(true); }
   else if (d.act === 'pin-forgot') { if (confirm('Esqueceste o PIN? Para entrar tens de apagar TODOS os dados deste telemóvel (só recuperas com uma cópia de segurança). Apagar?')) { [KEY, 'poupanca-v1', PINKEY, LOCKKEY].forEach(k => localStorage.removeItem(k)); location.reload(); } }
   else if (d.act === 'export') exportData();
   else if (d.act === 'import') $('file').click();
@@ -539,7 +556,7 @@ document.addEventListener('change', ev => {
 });
 document.addEventListener('input', ev => { if (ev.target.id === 'q') { ui.f.q = ev.target.value; $('elist').innerHTML = entriesList(); } });
 // Cortina de privacidade: tapa o ecrã quando a app perde o foco, para o seletor de apps não mostrar saldos.
-const cover = on => $('cover').classList.toggle('on', on);
+const cover = on => { $('cover').classList.toggle('on', on); if (on && reveal) setReveal(false); };
 window.addEventListener('blur', () => cover(true));
 window.addEventListener('pagehide', () => cover(true));
 window.addEventListener('focus', () => cover(false));
