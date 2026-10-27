@@ -46,19 +46,16 @@ function normalize(d) {
 
 // ---------- Utilitários ----------
 const uid = () => (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(16).slice(2));
-const VERSION = 'v8';
+const VERSION = 'v9';
 const fmtEur = new Intl.NumberFormat('pt-PT', { style: 'currency', currency: 'EUR' });
-// Modo privado: valores escondidos até tocares no olho (volta a esconder sozinho). Protege o seletor de apps do iOS.
-const PRIVKEY = 'poupanca-privacy', REVEAL_MS = 20000;
-let reveal = false, revealTimer = null;
+// Modo privado: valores escondidos; só aparecem enquanto manténs o dedo premido no olho.
+// Assim, ao sair da app (e o iOS tirar a imagem do seletor de apps) nunca há valores à vista.
+const PRIVKEY = 'poupanca-privacy';
+let reveal = false;
 const privacyOn = () => { try { return localStorage.getItem(PRIVKEY) !== '0'; } catch (e) { return true; } };
 const masked = () => privacyOn() && !reveal;
 const eur = n => (masked() ? '••••' : fmtEur.format(n));
-function setReveal(on) {
-  reveal = on; clearTimeout(revealTimer);
-  if (on) revealTimer = setTimeout(() => setReveal(false), REVEAL_MS);
-  render(true);
-}
+function setReveal(on) { if (reveal === on) return; reveal = on; render(true); }
 const ymd = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 const today = () => ymd(new Date());
 const parseD = s => new Date(s + 'T12:00:00');
@@ -346,7 +343,7 @@ function accounts() {
   <h2>Cópia de segurança</h2><div class="card"><p class="sub" style="margin-top:0">Os dados ficam só neste telemóvel. Exporta uma cópia todos os meses e guarda o ficheiro no iCloud ou nos Ficheiros.</p>
   <div class="alert ${backupStatus().tone}" style="margin:8px 0 0">${backupStatus().icon} ${backupStatus().text}</div>
   <div class="btns" style="margin-top:8px"><button class="btn" data-act="export">Exportar</button><button class="btn" data-act="import">Importar</button></div></div><input id="file" type="file" accept=".json,application/json" hidden>
-  <h2>Segurança</h2><div class="card"><div class="between" style="margin-bottom:10px"><div><b>Modo privado</b><div class="sub">Esconde os valores (••••) até tocares no 👁️. Volta a esconder passados 20 s ou ao sair da app.</div></div><button class="btn ${privacyOn() ? 'main' : ''}" data-act="privacy" style="flex:none;padding:8px 14px">${privacyOn() ? 'Ligado' : 'Desligado'}</button></div>
+  <h2>Segurança</h2><div class="card"><div class="between" style="margin-bottom:10px"><div><b>Modo privado</b><div class="sub">Esconde os valores (••••). Mantém o dedo premido no 👁️ para os ver; ao largares, escondem-se logo.</div></div><button class="btn ${privacyOn() ? 'main' : ''}" data-act="privacy" style="flex:none;padding:8px 14px">${privacyOn() ? 'Ligado' : 'Desligado'}</button></div>
   <div style="border-top:1px solid var(--line);padding-top:10px"></div><p class="sub" style="margin-top:0">${getPin() ? '🔒 PIN ativo. A app bloqueia ao abrir e depois de 30 segundos fora dela.' : 'Protege a app com um PIN de 6 dígitos. É um bloqueio de ecrã: impede que outra pessoa abra a app no teu telemóvel.'}</p>
   <div class="btns" style="margin-top:8px">${getPin() ? '<button class="btn" data-act="pin-change">Alterar PIN</button><button class="btn del" data-act="pin-remove">Remover PIN</button>' : '<button class="btn main" data-act="pin-set">Definir PIN</button>'}</div></div>
   <p class="note" style="text-align:center">Poupança ${VERSION}</p>`;
@@ -521,8 +518,8 @@ document.addEventListener('click', ev => {
   const t = ev.target.closest('button, b[data-edit-goal]');
   if (!t) { if (ev.target.id === 'sheet-bg') closeSheet(); return; }
   const d = t.dataset, add = () => ({ entries: entryForm, budgets: budgetForm, goals: goalForm, accounts: () => ({ accounts: accountForm, rec: recForm, inv: invForm }[ui.seg])() }[tab])();
-  if (t.id === 'eye') setReveal(!reveal);
-  else if (d.tab) go(d.tab);
+  if (t.id === 'eye') return;
+  if (d.tab) go(d.tab);
   else if (t.id === 'add') add();
   else if (d.quick) entryForm(null, d.quick);
   else if (d.seg) { ui.seg = d.seg; render(true); }
@@ -562,6 +559,10 @@ window.addEventListener('pagehide', () => cover(true));
 window.addEventListener('focus', () => cover(false));
 window.addEventListener('pageshow', () => cover(false));
 $('cover').addEventListener('click', () => { if (!document.hidden) cover(false); });
+const eye = $('eye');
+eye.addEventListener('pointerdown', e => { e.preventDefault(); setReveal(true); });
+eye.addEventListener('contextmenu', e => e.preventDefault());
+['pointerup', 'pointercancel', 'touchend', 'touchcancel', 'mouseup'].forEach(t => document.addEventListener(t, () => setReveal(false)));
 let hiddenAt = 0;
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) { hiddenAt = Date.now(); cover(true); return; }
