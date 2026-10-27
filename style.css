@@ -100,3 +100,7 @@ input,select,textarea{font-size:16px}
 
 #cover{position:fixed;inset:0;z-index:100;background:#124738;color:#fff;display:none;align-items:center;justify-content:center;text-align:center;font-size:28px;font-weight:700;line-height:1.6}
 #cover.on{display:flex}
+
+.hr{display:flex;gap:10px;align-items:center}
+#eye{width:36px;height:36px;border-radius:50%;border:0;background:var(--card);font-size:18px;line-height:1}
+#eye[hidden],#add[hidden]{display:none}
