@@ -23,7 +23,7 @@ function load() {
   } catch (e) {}
   return empty();
 }
-function save() { try { localStorage.setItem(KEY, JSON.stringify(db)); } catch (e) { alert('Não foi possível guardar os dados.'); } }
+function save() { try { localStorage.setItem(KEY, JSON.stringify(db)); } catch (e) { toast('Não foi possível guardar os dados.'); } }
 if (navigator.storage && navigator.storage.persist) navigator.storage.persist();
 
 // Aceita dados da versão anterior e o financas.json da app Swift (datas em segundos desde 2001, nomes em português).
@@ -46,7 +46,7 @@ function normalize(d) {
 
 // ---------- Utilitários ----------
 const uid = () => (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(16).slice(2));
-const VERSION = 'v9';
+const VERSION = 'v10';
 const fmtEur = new Intl.NumberFormat('pt-PT', { style: 'currency', currency: 'EUR' });
 // Modo privado: valores escondidos; só aparecem enquanto manténs o dedo premido no olho.
 // Assim, ao sair da app (e o iOS tirar a imagem do seletor de apps) nunca há valores à vista.
@@ -373,7 +373,12 @@ function closeSheet() { $('sheet-bg').hidden = true; $('sheet').innerHTML = ''; 
 const opts = (obj, sel) => Object.entries(obj).map(([k, v]) => `<option value="${k}" ${k === sel ? 'selected' : ''}>${Array.isArray(v) ? v[1] + ' ' + v[0] : v}</option>`).join('');
 const accOpts = (sel, blank) => (blank ? '<option value="">Selecionar</option>' : '') + db.accounts.map(a => `<option value="${a.id}" ${a.id === sel ? 'selected' : ''}>${esc(a.name)}</option>`).join('');
 const goalOpts = sel => '<option value="">Nenhum</option>' + db.goals.map(g => `<option value="${g.id}" ${g.id === sel ? 'selected' : ''}>${esc(g.name)}</option>`).join('');
-const buttons = id => `<div class="btns">${id ? '<button class="btn del" data-act="delete">Apagar</button>' : ''}<button class="btn" data-act="cancel">Cancelar</button><button class="btn main" data-act="save">Guardar</button></div>`;
+function toast(m) {
+  let t = document.getElementById('toast'); if (!t) { t = document.createElement('div'); t.id = 'toast'; document.body.appendChild(t); }
+  t.textContent = m; t.classList.add('on'); clearTimeout(toast.t); toast.t = setTimeout(() => t.classList.remove('on'), 3500);
+}
+const showErr = m => { const e = document.getElementById('err'); if (e) { e.textContent = m; e.scrollIntoView({ block: 'nearest' }); } };
+const buttons = id => `<div id="err" class="formerr"></div><div class="btns">${id ? '<button class="btn del" data-act="delete">Apagar</button>' : ''}<button class="btn" data-act="cancel">Cancelar</button><button class="btn main" data-act="save">Guardar</button></div>`;
 const val = n => document.querySelector(`#sheet [name=${n}]`).value;
 let form = null;
 
@@ -416,12 +421,12 @@ function goalForm(id) {
   const g = id ? db.goals.find(x => x.id === id) : null; form = { type: 'goal', id };
   openSheet(`<h3>${g ? 'Editar objetivo' : 'Novo objetivo'}</h3><label>Objetivo</label><input name="name" placeholder="ex.: Viagem" value="${g ? esc(g.name) : ''}">
   <label>Valor pretendido em €</label><input name="target" inputmode="decimal" value="${g ? num(g.target) : ''}">
-  <label>Já tenho poupado em €</label><input name="saved" inputmode="decimal" value="${g ? num(g.saved) : '0'}">
+  <label>Já tenho poupado em €</label><input name="saved" inputmode="decimal" placeholder="0" value="${g ? num(g.saved) : ''}">
   <label>Prazo (opcional)</label><input name="deadline" type="date" value="${g?.deadline || ''}">${buttons(id)}`);
 }
 function recForm(id) {
   const r = id ? db.recurring.find(x => x.id === id) : null; form = { type: 'rec', id };
-  if (!db.accounts.length) return alert('Adiciona primeiro uma conta.');
+  if (!db.accounts.length) return toast('Adiciona primeiro uma conta.');
   openSheet(`<h3>${r ? 'Editar recorrente' : 'Nova recorrente'}</h3>${entryFields(r, r?.kind || 'expense', true)}
   <label>Periodicidade</label><select name="freq">${Object.entries(FREQ).map(([k, v]) => `<option value="${k}" ${r?.freq === k ? 'selected' : ''}>${v}</option>`).join('')}</select>
   <label>Estado</label><select name="active"><option value="1">Ativa</option><option value="0" ${r && !r.active ? 'selected' : ''}>Pausada</option></select>
@@ -432,21 +437,22 @@ function invForm(id) {
   const i = id ? db.invest.find(x => x.id === id) : null; form = { type: 'inv', id };
   openSheet(`<h3>${i ? 'Editar' : 'Novo investimento / dívida'}</h3><label>Nome</label><input name="name" placeholder="ex.: ETF Mundo" value="${i ? esc(i.name) : ''}">
   <label>Tipo</label><select name="type">${Object.entries(INV).map(([k, v]) => `<option value="${k}" ${i?.type === k ? 'selected' : ''}>${v}</option>`).join('')}</select>
-  <label>Capital investido em € (ignora nas dívidas)</label><input name="invested" inputmode="decimal" value="${i ? num(i.invested) : '0'}">
+  <label>Capital investido em € (ignora nas dívidas)</label><input name="invested" inputmode="decimal" placeholder="0" value="${i ? num(i.invested) : ''}">
   <label>Valor atual em € (ou valor em dívida)</label><input name="current" inputmode="decimal" value="${i ? num(i.current) : ''}">${buttons(id)}`);
 }
 
+const optMoney = raw => (raw.trim() === '' ? 0 : parseMoney(raw));
 function saveForm() {
   const { type, id } = form;
   if (type === 'account') {
     const name = val('name').trim(), amount = parseMoney(val('amount'));
-    if (!name || amount === null) return alert('Indica o nome e um saldo válido (ex.: 120,50).');
+    if (!name || amount === null) return showErr('Indica o nome e um saldo válido (ex.: 120,50).');
     if (id) Object.assign(acc(id), { name, kind: val('kind'), opening: amount }); else db.accounts.push({ id: uid(), name, kind: val('kind'), opening: amount });
   } else if (type === 'entry' || type === 'rec') {
     const amount = parseMoney(val('amount')), kind = form.kind, isRec = type === 'rec';
-    if (!amount) return alert('Indica um valor maior que zero.');
-    if (isRec && !val('name').trim()) return alert('Indica um nome.');
-    if (kind === 'transfer' && (!val('dest') || val('dest') === val('account'))) return alert('Escolhe uma conta de destino diferente da conta de origem.');
+    if (!amount) return showErr('Indica um valor maior que zero.');
+    if (isRec && !val('name').trim()) return showErr('Indica um nome.');
+    if (kind === 'transfer' && (!val('dest') || val('dest') === val('account'))) return showErr('Escolhe uma conta de destino diferente da conta de origem.');
     const base = { kind, amount, accountId: val('account'), destId: kind === 'transfer' ? val('dest') : null, category: kind === 'expense' ? val('category') : 'outros', goalId: kind !== 'income' && val('goal') ? val('goal') : null };
     if (isRec) {
       const next = val('date') || today(), r = { id: id || uid(), name: val('name').trim(), ...base, freq: val('freq'), next, day: +next.slice(8, 10), active: val('active') === '1' };
@@ -459,17 +465,17 @@ function saveForm() {
     }
   } else if (type === 'budget') {
     const limit = parseMoney(val('amount')), category = val('category');
-    if (!limit) return alert('Indica um limite maior que zero.');
+    if (!limit) return showErr('Indica um limite maior que zero.');
     db.budgets = db.budgets.filter(b => b.category !== category && b.id !== id); db.budgets.push({ id: id || uid(), category, limit });
   } else if (type === 'goal') {
-    const name = val('name').trim(), target = parseMoney(val('target')), saved = parseMoney(val('saved'));
-    if (!name || !target || saved === null) return alert('Preenche o nome e valores válidos.');
+    const name = val('name').trim(), target = parseMoney(val('target')), saved = optMoney(val('saved'));
+    if (!name || !target || saved === null) return showErr('Preenche o nome e o valor pretendido (maior que zero). Os outros campos aceitam números como 120,50.');
     const old = id ? db.goals.find(x => x.id === id) : null, s = Math.min(saved, target);
     const g = { id: id || uid(), name, target, saved: s, deadline: val('deadline'), created: old?.created || today(), base: old ? old.base : s };
     if (id) db.goals[db.goals.findIndex(x => x.id === id)] = g; else db.goals.push(g);
   } else if (type === 'inv') {
-    const name = val('name').trim(), invested = parseMoney(val('invested')), current = parseMoney(val('current'));
-    if (!name || invested === null || current === null) return alert('Preenche o nome e valores válidos.');
+    const name = val('name').trim(), invested = optMoney(val('invested')), current = parseMoney(val('current'));
+    if (!name || invested === null || current === null) return showErr('Preenche o nome e valores válidos.');
     const i = { id: id || uid(), name, type: val('type'), invested, current };
     if (id) db.invest[db.invest.findIndex(x => x.id === id)] = i; else db.invest.push(i);
   }
@@ -479,7 +485,7 @@ function saveForm() {
 function deleteForm() {
   const { type, id } = form;
   if (type === 'account') {
-    if (db.entries.some(e => e.accountId === id || e.destId === id) || db.recurring.some(r => r.accountId === id || r.destId === id)) return alert('Esta conta tem movimentos ou regras recorrentes. Apaga ou altera primeiro esses registos.');
+    if (db.entries.some(e => e.accountId === id || e.destId === id) || db.recurring.some(r => r.accountId === id || r.destId === id)) return toast('Esta conta tem movimentos ou regras recorrentes. Apaga ou altera primeiro esses registos.');
     if (!confirm('Apagar esta conta?')) return;
     db.accounts = db.accounts.filter(a => a.id !== id);
   } else {
@@ -507,7 +513,7 @@ function importData(file) {
       const d = normalize(JSON.parse(r.result));
       if (!confirm(`Importar ${d.accounts.length} conta(s) e ${d.entries.length} movimento(s)? Isto substitui os dados atuais.`)) return;
       db = d; save(); applyRecurring(); render();
-    } catch (e) { alert('Ficheiro inválido.'); }
+    } catch (e) { toast('Ficheiro inválido.'); }
   };
   r.readAsText(file);
 }
