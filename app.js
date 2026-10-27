@@ -292,9 +292,7 @@ function entries() {
 function budgets() {
   const ym = curMonth(), prev = addMonthKey(ym, -1);
   if (!db.budgets.length) {
-    return `<div class="card example"><div class="between"><span>🍔 Alimentação</span><span class="sub">180 € / 250 €</span></div>${bar(.72)}<div class="sub">72% · exemplo</div></div>
-    <div class="card example"><div class="between"><span>📱 Subscrições</span><span class="sub">105 € / 100 €</span></div>${bar(1, 'over')}<div class="sub neg">Excedido · exemplo</div></div>
-    ${emptyBox('📊', 'Define limites mensais por categoria e recebe alertas aos 80% e 100%.')}<button class="btn main" data-act="new">Criar o primeiro orçamento</button>`;
+    return `${emptyBox('📊', 'Define limites mensais por categoria e recebe alertas aos 80% e 100%.')}<button class="btn main" data-act="new">Criar o primeiro orçamento</button>`;
   }
   const tot = db.budgets.reduce((s, b) => s + b.limit, 0), totSpent = db.budgets.reduce((s, b) => s + sumEntries('expense', ym, b.category), 0);
   return `<div class="card"><div class="between"><b>Total em ${monthName(ym, true)}</b><span class="sub">${eur(totSpent)} / ${eur(tot)}</span></div>${bar(totSpent / Math.max(tot, .01), totSpent > tot ? 'over' : '')}</div>
@@ -309,8 +307,7 @@ function budgets() {
 // --- Objetivos ---
 function goals() {
   if (!db.goals.length) {
-    return `<div class="card example"><div class="between"><b>🚴 Bicicleta de triatlo</b><span class="pos">12%</span></div>${bar(.125)}<div class="sub">500 € de 4 000 € · faltam 3 500 €</div><div class="sub">Poupança mensal necessária: 291,67 € (prazo 12 meses) · exemplo</div></div>
-    ${emptyBox('🎯', 'Cria um objetivo com prazo e vê quanto precisas de poupar por mês.')}<button class="btn main" data-act="new">Criar o primeiro objetivo</button>`;
+    return `${emptyBox('🎯', 'Cria um objetivo com prazo e vê quanto precisas de poupar por mês.')}<button class="btn main" data-act="new">Criar o primeiro objetivo</button>`;
   }
   return db.goals.map(g => {
     const i = goalInfo(g);
@@ -405,7 +402,7 @@ function budgetForm(id) {
 }
 function goalForm(id) {
   const g = id ? db.goals.find(x => x.id === id) : null; form = { type: 'goal', id };
-  openSheet(`<h3>${g ? 'Editar objetivo' : 'Novo objetivo'}</h3><label>Objetivo</label><input name="name" placeholder="ex.: Bicicleta de triatlo" value="${g ? esc(g.name) : ''}">
+  openSheet(`<h3>${g ? 'Editar objetivo' : 'Novo objetivo'}</h3><label>Objetivo</label><input name="name" placeholder="ex.: Viagem" value="${g ? esc(g.name) : ''}">
   <label>Valor pretendido em €</label><input name="target" inputmode="decimal" value="${g ? num(g.target) : ''}">
   <label>Já tenho poupado em €</label><input name="saved" inputmode="decimal" value="${g ? num(g.saved) : '0'}">
   <label>Prazo (opcional)</label><input name="deadline" type="date" value="${g?.deadline || ''}">${buttons(id)}`);
