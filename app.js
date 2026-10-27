@@ -538,9 +538,17 @@ document.addEventListener('change', ev => {
   else if (t.dataset.f) { ui.f[t.dataset.f] = t.value; render(true); }
 });
 document.addEventListener('input', ev => { if (ev.target.id === 'q') { ui.f.q = ev.target.value; $('elist').innerHTML = entriesList(); } });
+// Cortina de privacidade: tapa o ecrã quando a app perde o foco, para o seletor de apps não mostrar saldos.
+const cover = on => $('cover').classList.toggle('on', on);
+window.addEventListener('blur', () => cover(true));
+window.addEventListener('pagehide', () => cover(true));
+window.addEventListener('focus', () => cover(false));
+window.addEventListener('pageshow', () => cover(false));
+$('cover').addEventListener('click', () => { if (!document.hidden) cover(false); });
 let hiddenAt = 0;
 document.addEventListener('visibilitychange', () => {
-  if (document.hidden) { hiddenAt = Date.now(); return; }
+  if (document.hidden) { hiddenAt = Date.now(); cover(true); return; }
+  cover(false);
   if (getPin() && $('lock').hidden && Date.now() - hiddenAt > 30000) { closeSheet(); showLock('unlock'); }
   applyRecurring(); if ($('sheet-bg').hidden) render(true);
 });
