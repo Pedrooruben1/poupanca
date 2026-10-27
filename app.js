@@ -590,6 +590,9 @@ async function pinKey(k) {
   L.busy = false; drawLock();
 }
 
+// Bloqueia o zoom por pinça no iOS (o toque duplo é tratado por touch-action: manipulation no CSS).
+['gesturestart', 'gesturechange', 'gestureend'].forEach(g => document.addEventListener(g, e => e.preventDefault()));
+
 db = load();
 if (getPin()) showLock('unlock');
 applyRecurring();
