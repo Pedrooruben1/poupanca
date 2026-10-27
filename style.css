@@ -97,3 +97,6 @@ html{-webkit-text-size-adjust:100%;touch-action:manipulation}
 body,button,input,select,.item,.pad,nav{touch-action:manipulation}
 button,nav,.pad,.lockbox,header{-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
 input,select,textarea{font-size:16px}
+
+#cover{position:fixed;inset:0;z-index:100;background:#124738;color:#fff;display:none;align-items:center;justify-content:center;text-align:center;font-size:28px;font-weight:700;line-height:1.6}
+#cover.on{display:flex}
