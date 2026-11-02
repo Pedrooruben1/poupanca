@@ -28,25 +28,35 @@ if (navigator.storage && navigator.storage.persist) navigator.storage.persist();
 
 // Aceita dados da versão anterior e o financas.json da app Swift (datas em segundos desde 2001, nomes em português).
 function normalize(d) {
-  const kindMap = { Banco: 'ordem', banco: 'ordem', Dinheiro: 'carteira', 'Poupança': 'poupanca' };
+  // tipos de conta: aceita as chaves, os nomes em português e variantes (maiúsculas, acentos); o resto vira conta à ordem
+  const kindWords = { ordem: 'ordem', 'conta a ordem': 'ordem', banco: 'ordem', poupanca: 'poupanca', carteira: 'carteira', dinheiro: 'carteira', 'dinheiro fisico': 'carteira', investimento: 'investimento', investimentos: 'investimento' };
+  const kindMap = new Proxy({}, { get: (_, k) => kindWords[norm(String(k)).trim()] });
   const entryMap = { Entrada: 'income', Despesa: 'expense', 'Transferência': 'transfer' };
   const catMap = Object.fromEntries(Object.entries(CATS).map(([k, v]) => [v[0], k])); catMap.Casa = 'habitacao'; catMap.casa = 'habitacao';
   const cat = c => (CATS[c] ? c : catMap[c] || 'outros');
-  const date = x => typeof x === 'number' ? new Date((x + 978307200) * 1000).toISOString().slice(0, 10) : String(x).slice(0, 10);
+  const num0 = v => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
+  // ids só com letras, números, _ e - (impede código injetado através de um ficheiro alterado)
+  const sid = v => String(v ?? '').replace(/[^A-Za-z0-9_-]/g, '').slice(0, 64) || null;
+  const id = v => sid(v) || uid();
+  const dateOk = x => (/^\d{4}-\d{2}-\d{2}$/.test(String(x)) ? String(x) : '');
+  // datas da app Swift (segundos desde 2001): converte para o dia no fuso do telemóvel
+  const date = x => (typeof x === 'number' ? ymd(new Date((x + 978307200) * 1000)) : dateOk(String(x).slice(0, 10)) || today());
+  const str = (v, d) => String(v ?? '').slice(0, 200) || d;
   const t = today();
+  const pick = (v, table, dflt) => (table[v] ? v : dflt);
   return {
-    accounts: (d.accounts || []).map(a => ({ id: a.id, name: a.name, kind: kindMap[a.kind] || a.kind, opening: a.opening ?? a.openingBalance ?? 0 })),
-    entries: (d.entries || []).map(e => ({ id: e.id, date: date(e.date), kind: entryMap[e.kind] || e.kind, amount: e.amount, accountId: e.accountId ?? e.accountID, destId: e.destId ?? e.destinationID ?? null, category: cat(e.category), note: e.note || '', goalId: e.goalId || null, recId: e.recId || null })),
-    budgets: (d.budgets || []).map(b => ({ id: b.id, category: cat(b.category), limit: b.limit ?? b.monthlyLimit })),
-    goals: (d.goals || []).map(g => ({ id: g.id, name: g.name, target: g.target, saved: g.saved, deadline: g.deadline || '', created: g.created || t, base: g.base ?? g.saved })),
-    recurring: d.recurring || [],
-    invest: d.invest || [],
+    accounts: (d.accounts || []).map(a => ({ id: id(a.id), name: str(a.name, 'Conta'), kind: pick(kindMap[a.kind] || a.kind, KINDS, 'ordem'), opening: num0(a.opening ?? a.openingBalance) })),
+    entries: (d.entries || []).map(e => ({ id: id(e.id), date: date(e.date), kind: pick(entryMap[e.kind] || e.kind, ENTRY, 'expense'), amount: Math.abs(num0(e.amount)), accountId: sid(e.accountId ?? e.accountID), destId: sid(e.destId ?? e.destinationID), category: cat(e.category), note: str(e.note, ''), goalId: sid(e.goalId), recId: sid(e.recId) })),
+    budgets: (d.budgets || []).map(b => ({ id: id(b.id), category: cat(b.category), limit: Math.abs(num0(b.limit ?? b.monthlyLimit)) })),
+    goals: (d.goals || []).map(g => ({ id: id(g.id), name: str(g.name, 'Objetivo'), target: Math.abs(num0(g.target)), saved: Math.abs(num0(g.saved)), deadline: dateOk(g.deadline), created: dateOk(g.created) || t, base: Math.abs(num0(g.base ?? g.saved)) })),
+    recurring: (d.recurring || []).map(r => { const next = dateOk(r.next) || t; return { id: id(r.id), name: str(r.name, 'Recorrente'), kind: pick(r.kind, ENTRY, 'expense'), amount: Math.abs(num0(r.amount)), accountId: sid(r.accountId), destId: sid(r.destId), category: cat(r.category), goalId: sid(r.goalId), freq: pick(r.freq, FREQ, 'monthly'), next, day: Math.min(Math.max(Math.round(num0(r.day)) || +next.slice(8, 10), 1), 31), active: r.active !== false }; }),
+    invest: (d.invest || []).map(i => ({ id: id(i.id), name: str(i.name, 'Investimento'), type: pick(i.type, INV, 'outro'), invested: Math.abs(num0(i.invested)), current: Math.abs(num0(i.current)) })),
   };
 }
 
 // ---------- Utilitários ----------
 const uid = () => (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(16).slice(2));
-const VERSION = 'v12';
+const VERSION = 'v15';
 const fmtEur = new Intl.NumberFormat('pt-PT', { style: 'currency', currency: 'EUR' });
 // Modo privado: valores escondidos; só aparecem enquanto manténs o dedo premido no olho.
 // Assim, ao sair da app (e o iOS tirar a imagem do seletor de apps) nunca há valores à vista.
@@ -54,7 +64,7 @@ const PRIVKEY = 'poupanca-privacy';
 let reveal = false;
 const privacyOn = () => { try { return localStorage.getItem(PRIVKEY) !== '0'; } catch (e) { return true; } };
 const masked = () => privacyOn() && !reveal;
-const eur = n => (masked() ? '••••' : fmtEur.format(n));
+const eur = n => (masked() ? '••••' : fmtEur.format(n).replace(/\u2212/g, '-'));
 function setReveal(on) { if (reveal === on) return; reveal = on; render(true); }
 const ymd = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 const today = () => ymd(new Date());
@@ -66,25 +76,34 @@ const addMonthKey = (ym, n) => { const d = new Date(+ym.slice(0, 4), +ym.slice(5
 const num = n => String(n).replace('.', ',');
 const pct = n => `${(Math.round(n * 10) / 10).toString().replace('.', ',')}%`;
 
-// Aceita 12,50 e 12.50; sem negativos.
-function parseMoney(raw) {
-  const n = Number(String(raw).replace(/\s/g, '').replace(',', '.'));
-  return raw !== '' && Number.isFinite(n) && n >= 0 ? n : null;
+// Aceita 12,50, 12.50 e 1.600,50 (ponto dos milhares); sem negativos, salvo se allowNeg.
+function parseMoney(raw, allowNeg = false) {
+  let t = String(raw).replace(/\s/g, ''), sgn = 1;
+  if (allowNeg && /^[-−]/.test(t)) { sgn = -1; t = t.slice(1); }
+  let n = null;
+  if (/^\d{1,3}(\.\d{3})+(,\d{1,2})?$/.test(t)) n = Number(t.replace(/\./g, '').replace(',', '.')); // 1.600 ou 1.600,50
+  else if (/^\d+([.,]\d{1,2})?$/.test(t)) n = Number(t.replace(',', '.')); // 12,50 ou 12.50
+  return n === null || !Number.isFinite(n) ? null : sgn * n;
 }
 
 const acc = id => db.accounts.find(a => a.id === id);
 function balance(a) {
+  const t = today();
   return db.entries.reduce((b, e) => {
+    if (e.date > t) return b; // movimentos agendados só contam a partir da data
     if (e.kind === 'transfer') return e.accountId === a.id ? b - e.amount : e.destId === a.id ? b + e.amount : b;
     if (e.accountId !== a.id) return b;
     return b + (e.kind === 'income' ? e.amount : -e.amount);
   }, a.opening);
 }
-const spendable = () => db.accounts.filter(a => a.kind !== 'investimento').reduce((s, a) => s + balance(a), 0);
-const investedAccounts = () => db.accounts.filter(a => a.kind === 'investimento').reduce((s, a) => s + balance(a), 0);
+const sumKinds = kinds => db.accounts.filter(a => kinds.includes(a.kind)).reduce((s, a) => s + balance(a), 0);
+const isSpend = id => ['ordem', 'carteira'].includes(acc(id)?.kind);
+const spendable = () => sumKinds(['ordem', 'carteira']);
+const savingsTotal = () => sumKinds(['poupanca']);
+const investedAccounts = () => sumKinds(['investimento']);
 const assets = () => db.invest.filter(i => i.type !== 'divida').reduce((s, i) => s + i.current, 0);
 const debts = () => db.invest.filter(i => i.type === 'divida').reduce((s, i) => s + i.current, 0);
-const netWorth = () => spendable() + investedAccounts() + assets() - debts();
+const netWorth = () => spendable() + savingsTotal() + investedAccounts() + assets() - debts();
 
 const curMonth = () => today().slice(0, 7);
 const sumEntries = (kind, ym, cat, upToDay) => db.entries
@@ -134,7 +153,7 @@ function goalInfo(g) {
   if (remaining === 0) { info.status = 'Concluído ✅'; info.tone = 'pos'; return info; }
   if (g.deadline) {
     const days = (parseD(g.deadline) - parseD(today())) / 864e5;
-    if (days <= 0) { info.status = 'Prazo ultrapassado'; info.tone = 'neg'; info.need = remaining; return info; }
+    if (days < 0) { info.status = 'Prazo ultrapassado'; info.tone = 'neg'; info.need = remaining; return info; }
     info.need = remaining / Math.max(1, Math.ceil(days / 30.44));
     const total = Math.max((parseD(g.deadline) - parseD(g.created)) / 864e5, 1), frac = Math.min(Math.max((total - days) / total, 0), 1);
     const expected = g.base + (g.target - g.base) * frac, diff = saved - expected, tol = g.target * .02;
@@ -232,20 +251,24 @@ function entryRow(e) {
   const name = e.note || (e.kind === 'expense' ? CATS[e.category]?.[0] : ENTRY[e.kind]);
   const a = acc(e.accountId), d = acc(e.destId);
   const where = e.kind === 'transfer' ? `${esc(a?.name || '?')} → ${esc(d?.name || '?')}` : esc(a?.name || '');
-  const sg = e.kind === 'expense' ? '−' : e.kind === 'income' ? '+' : '';
+  const sg = e.kind === 'expense' ? '-' : e.kind === 'income' ? '+' : '';
   return `<button class="item" data-edit-entry="${e.id}"><div class="ico">${ico}</div><div class="grow"><div>${esc(name)}${e.recId ? ' 🔁' : ''}</div><div class="sub">${fmtDate(e.date)} · ${where}</div></div><div class="amt ${e.kind === 'income' ? 'pos' : ''}">${sg}${eur(e.amount)}</div></button>`;
 }
 
 function home() {
   const ym = curMonth(), prev = addMonthKey(ym, -1);
-  const inc = sumEntries('income', ym), exp = sumEntries('expense', ym), pInc = sumEntries('income', prev), pExp = sumEntries('expense', prev);
+  const inc = sumEntries('income', ym), exp = sumEntries('expense', ym), day0 = +today().slice(8, 10), pInc = sumEntries('income', prev, null, day0), pExp = sumEntries('expense', prev, null, day0);
   const rate = inc > 0 ? ((inc - exp) / inc) * 100 : null;
   const delta = (cur, p, goodUp) => {
     if (!p) return '<small class="sub">sem dados do mês anterior</small>';
     const d = cur - p, good = goodUp ? d >= 0 : d <= 0;
-    return `<small class="${good ? 'pos' : 'neg'}">${d >= 0 ? '▲' : '▼'} ${eur(Math.abs(d))} vs. mês anterior</small>`;
+    return `<small class="${good ? 'pos' : 'neg'}">${d >= 0 ? '▲' : '▼'} ${eur(Math.abs(d))} vs. mesmo período do mês anterior</small>`;
   };
-  const up = upcoming(monthEnd()), fc = spendable() + up.reduce((s, u) => s + sign(u.rec), 0);
+  // efeito de um movimento no disponível: transferências para/da Poupança ou Investimento também contam
+  const spendFx = x => x.kind === 'transfer' ? (isSpend(x.destId) ? x.amount : 0) - (isSpend(x.accountId) ? x.amount : 0) : isSpend(x.accountId) ? (x.kind === 'income' ? x.amount : -x.amount) : 0;
+  const up = upcoming(monthEnd()).filter(u => spendFx(u.rec));
+  const sched = db.entries.filter(e => e.date > today() && e.date <= monthEnd() && spendFx(e));
+  const fc = spendable() + up.reduce((s, u) => s + spendFx(u.rec), 0) + sched.reduce((s, e) => s + spendFx(e), 0);
   const budgetLeft = db.budgets.reduce((s, b) => s + Math.max(b.limit - sumEntries('expense', ym, b.category), 0), 0);
   const al = alerts().slice(0, 5);
   const pts = monthEnds(6).map(m => ({ label: monthName(m.k), v: db.accounts.reduce((s, a) => s + a.opening, 0) + db.entries.filter(e => e.date <= m.end && e.kind !== 'transfer').reduce((s, e) => s + (e.kind === 'income' ? e.amount : -e.amount), 0) }));
@@ -255,19 +278,19 @@ function home() {
 
   return `<div class="hero"><small>DISPONÍVEL PARA GASTAR</small><b>${eur(spendable())}</b><div>Património líquido: <strong>${eur(netWorth())}</strong></div></div>
   ${db.accounts.length ? `<div class="card qa"><div class="qarow"><input id="qa" placeholder="Registo rápido: 12,50 café" enterkeyhint="done" autocomplete="off"><button class="btn main" data-act="qa">Registar</button></div><div class="sub" style="margin-top:6px">Ex.: «gastei 30 no supermercado», «recebi 1500 salário», «transferi 100 para Poupança». Confirmas antes de guardar.</div></div>` : ''}
-  ${db.accounts.length ? `<div class="row2"><button class="btn main" data-quick="expense">− Adicionar despesa</button><button class="btn main alt" data-quick="income">+ Adicionar receita</button></div>` : ''}
+  ${db.accounts.length ? `<div class="row2"><button class="btn main" data-quick="expense">- Adicionar despesa</button><button class="btn main alt" data-quick="income">+ Adicionar receita</button></div>` : ''}
   <div class="row2" style="margin-top:12px">
     <div class="card metric"><span class="pos">↙</span><small>Receitas de ${monthName(ym)}</small><b>${eur(inc)}</b>${delta(inc, pInc, true)}</div>
     <div class="card metric"><span style="color:var(--orange)">↗</span><small>Despesas de ${monthName(ym)}</small><b>${eur(exp)}</b>${delta(exp, pExp, false)}</div>
   </div>
-  <div class="card"><div class="between"><b>Taxa de poupança</b><b class="${rate !== null && rate < 0 ? 'neg' : 'pos'}">${rate === null ? '—' : pct(rate)}</b></div>${rate === null ? '' : bar(rate / 100, rate < 0 ? 'over' : '')}
+  <div class="card"><div class="between"><b>Taxa de poupança</b><b class="${rate !== null && rate < 0 ? 'neg' : 'pos'}">${rate === null ? '-' : pct(rate)}</b></div>${rate === null ? '' : bar(rate / 100, rate < 0 ? 'over' : '')}
     <div class="sub">${rate === null ? 'Regista uma receita este mês para calcular.' : `Este mês poupaste ${eur(inc - exp)} de ${eur(inc)} recebidos.`}</div></div>
   <div class="card"><div class="between"><b>Previsão do saldo no fim do mês</b><b>${eur(fc)}</b></div>
-    <div class="sub">Saldo atual + receitas e despesas recorrentes previstas até ${fmtDate(monthEnd())}${up.length ? ` (${up.length} movimento${up.length > 1 ? 's' : ''})` : ''}.</div>
+    <div class="sub">Saldo atual + recorrentes e movimentos agendados até ${fmtDate(monthEnd())}${up.length ? ` (${up.length} movimento${up.length > 1 ? 's' : ''})` : ''}.</div>
     ${db.budgets.length ? `<div class="sub" style="margin-top:6px">Ainda tens <strong>${eur(budgetLeft)}</strong> por gastar nos orçamentos deste mês.</div>` : ''}</div>
   ${al.length ? `<h2>Alertas</h2>${al.map(([t, m]) => `<div class="alert ${t}">${m}</div>`).join('')}` : ''}
   <h2>Património</h2>
-  <div class="card kv"><div><span>Disponível</span><b>${eur(spendable())}</b></div><div><span>Investido</span><b>${eur(investedAccounts() + assets())}</b></div><div><span>Dívidas</span><b class="${debts() ? 'neg' : ''}">${debts() ? '−' : ''}${eur(debts())}</b></div><div class="tot"><span>Património líquido</span><b>${eur(netWorth())}</b></div></div>
+  <div class="card kv"><div><span>Disponível</span><b>${eur(spendable())}</b></div><div><span>Poupança</span><b>${eur(savingsTotal())}</b></div><div><span>Investido</span><b>${eur(investedAccounts() + assets())}</b></div><div><span>Dívidas</span><b class="${debts() ? 'neg' : ''}">${debts() ? '-' : ''}${eur(debts())}</b></div><div class="tot"><span>Património líquido</span><b>${eur(netWorth())}</b></div></div>
   <h2>Evolução do saldo</h2><div class="card">${db.entries.length || db.accounts.length ? lineChart(pts) : '<p class="sub">Sem dados ainda.</p>'}</div>
   <h2>Receitas vs. despesas</h2><div class="card">${groupedBars(ms)}</div>
   <h2>Despesas por categoria</h2>
@@ -279,9 +302,11 @@ function home() {
 
 // --- Movimentos ---
 function filtered() {
-  const f = ui.f, q = f.q.trim().toLowerCase();
+  const f = ui.f, q = norm(f.q.trim()), qn = f.q.trim().replace(/\s/g, '').replace(/\.(?=\d{3}(,|$))/g, '').replace('.', ',');
+  const numQ = /^\d+(,\d*)?$/.test(qn);
   return byDate(db.entries).filter(e => (!f.month || e.date.startsWith(f.month)) && (!f.cat || e.category === f.cat && e.kind === 'expense') && (!f.acc || e.accountId === f.acc || e.destId === f.acc)
-    && (!q || (e.note || '').toLowerCase().includes(q) || (CATS[e.category]?.[0] || '').toLowerCase().includes(q) || String(e.amount).replace('.', ',').includes(q) || (acc(e.accountId)?.name || '').toLowerCase().includes(q)));
+    && (!q || norm(e.note || '').includes(q) || norm(CATS[e.category]?.[0] || '').includes(q) || norm(acc(e.accountId)?.name || '').includes(q)
+      || (numQ && [String(e.amount).replace('.', ','), e.amount.toFixed(2).replace('.', ',')].some(a => a.includes(qn)))));
 }
 function entriesList() {
   const l = filtered();
@@ -325,11 +350,11 @@ function goals() {
     const i = goalInfo(g);
     return `<div class="card"><div class="between"><b data-edit-goal="${g.id}" class="link">${esc(g.name)} ✎</b><span class="pos">${Math.floor(i.p * 100)}%</span></div>${bar(i.p)}
     <div class="kv2"><div><span>Pretendido</span><b>${eur(g.target)}</b></div><div><span>Já poupado</span><b>${eur(i.saved)}</b></div><div><span>Falta poupar</span><b>${eur(i.remaining)}</b></div>
-    <div><span>Prazo</span><b>${g.deadline ? fmtDate(g.deadline) : '—'}</b></div></div>
+    <div><span>Prazo</span><b>${g.deadline ? fmtDate(g.deadline) : '-'}</b></div></div>
     ${i.need !== null && i.remaining > 0 ? `<div class="sub">Poupança mensal necessária: <strong>${eur(i.need)}</strong></div>` : ''}
     ${i.status ? `<div class="${i.tone}" style="font-weight:600;margin-top:4px">${i.status}</div>` : ''}
-    ${i.contrib ? `<div class="sub">Movimentos associados: ${i.contrib < 0 ? '−' : '+'}${eur(Math.abs(i.contrib))}</div>` : ''}
-    <div class="step"><button data-goal-step="${g.id}" data-d="-10">−</button><span>Ajuste manual (±10 €)</span><button data-goal-step="${g.id}" data-d="10">+</button></div></div>`;
+    ${i.contrib ? `<div class="sub">Movimentos associados: ${i.contrib < 0 ? '-' : '+'}${eur(Math.abs(i.contrib))}</div>` : ''}
+    <div class="step"><button data-goal-step="${g.id}" data-d="-10">-</button><span>Ajuste manual (±10 €)</span><button data-goal-step="${g.id}" data-d="10">+</button></div></div>`;
   }).join('') + '<p class="note">Uma transferência associada soma ao objetivo; uma despesa associada retira. O progresso atualiza sozinho.</p>';
 }
 
@@ -353,19 +378,19 @@ function accounts() {
 }
 function recurringView() {
   const up = upcoming(plusDays(30)), out = up.filter(u => u.rec.kind === 'expense').reduce((s, u) => s + u.rec.amount, 0), inn = up.filter(u => u.rec.kind === 'income').reduce((s, u) => s + u.rec.amount, 0);
-  const list = db.recurring.length ? `<div class="list">${db.recurring.map(r => `<button class="item" data-edit-rec="${r.id}"><div class="ico">${r.kind === 'income' ? '↙' : r.kind === 'transfer' ? '⇄' : CATS[r.category]?.[1] || '📦'}</div><div class="grow"><div>${esc(r.name)}${r.active ? '' : ' (pausada)'}</div><div class="sub">${FREQ[r.freq]} · próxima: ${fmtDate(r.next)}</div></div><div class="amt ${r.kind === 'income' ? 'pos' : ''}">${r.kind === 'expense' ? '−' : r.kind === 'income' ? '+' : ''}${eur(r.amount)}</div></button>`).join('')}</div>`
+  const list = db.recurring.length ? `<div class="list">${db.recurring.map(r => `<button class="item" data-edit-rec="${r.id}"><div class="ico">${r.kind === 'income' ? '↙' : r.kind === 'transfer' ? '⇄' : CATS[r.category]?.[1] || '📦'}</div><div class="grow"><div>${esc(r.name)}${r.active ? '' : ' (pausada)'}</div><div class="sub">${FREQ[r.freq]} · próxima: ${fmtDate(r.next)}</div></div><div class="amt ${r.kind === 'income' ? 'pos' : ''}">${r.kind === 'expense' ? '-' : r.kind === 'income' ? '+' : ''}${eur(r.amount)}</div></button>`).join('')}</div>`
     : emptyBox('🔁', 'Regista salário, renda, ginásio, subscrições, seguros ou prestações. Os movimentos são criados automaticamente nas datas certas.');
   return `<div class="card kv"><div><span>A pagar (30 dias)</span><b>${eur(out)}</b></div><div><span>A receber (30 dias)</span><b class="pos">${eur(inn)}</b></div></div>
-  ${up.length ? `<h2>Próximos 30 dias</h2><div class="list">${up.map(u => `<div class="item"><div class="ico">${u.rec.kind === 'income' ? '↙' : '📅'}</div><div class="grow"><div>${esc(u.rec.name)}</div><div class="sub">${fmtDate(u.date)}</div></div><div class="amt ${u.rec.kind === 'income' ? 'pos' : ''}">${u.rec.kind === 'expense' ? '−' : u.rec.kind === 'income' ? '+' : ''}${eur(u.rec.amount)}</div></div>`).join('')}</div>` : ''}
+  ${up.length ? `<h2>Próximos 30 dias</h2><div class="list">${up.map(u => `<div class="item"><div class="ico">${u.rec.kind === 'income' ? '↙' : '📅'}</div><div class="grow"><div>${esc(u.rec.name)}</div><div class="sub">${fmtDate(u.date)}</div></div><div class="amt ${u.rec.kind === 'income' ? 'pos' : ''}">${u.rec.kind === 'expense' ? '-' : u.rec.kind === 'income' ? '+' : ''}${eur(u.rec.amount)}</div></div>`).join('')}</div>` : ''}
   <h2>Regras recorrentes</h2>${list}<button class="btn main" data-act="new" style="margin-top:8px">+ Nova recorrente</button>`;
 }
 function investView() {
   const list = db.invest.length ? `<div class="list">${db.invest.map(i => {
     const gain = i.current - i.invested, rp = i.invested ? (gain / i.invested) * 100 : null;
     return `<button class="item" data-edit-inv="${i.id}"><div class="ico">${i.type === 'divida' ? '💳' : '📈'}</div><div class="grow"><div>${esc(i.name)}</div><div class="sub">${INV[i.type]}${i.type !== 'divida' ? ` · investido ${eur(i.invested)}` : ''}</div></div>
-    <div style="text-align:right"><div class="amt ${i.type === 'divida' ? 'neg' : ''}">${i.type === 'divida' ? '−' : ''}${eur(i.current)}</div>${i.type !== 'divida' && rp !== null ? `<div class="sub ${gain >= 0 ? 'pos' : 'neg'}">${gain >= 0 ? '+' : ''}${pct(rp)}</div>` : ''}</div></button>`;
+    <div style="text-align:right"><div class="amt ${i.type === 'divida' ? 'neg' : ''}">${i.type === 'divida' ? '-' : ''}${eur(i.current)}</div>${i.type !== 'divida' && rp !== null ? `<div class="sub ${gain >= 0 ? 'pos' : 'neg'}">${gain >= 0 ? '+' : ''}${pct(rp)}</div>` : ''}</div></button>`;
   }).join('')}</div>` : emptyBox('📈', 'Regista ETFs, ações, cripto, depósitos, certificados de aforro e dívidas.');
-  return `<div class="card kv"><div><span>Disponível</span><b>${eur(spendable())}</b></div><div><span>Investido</span><b>${eur(investedAccounts() + assets())}</b></div><div><span>Dívidas</span><b>${eur(debts())}</b></div><div class="tot"><span>Património líquido</span><b>${eur(netWorth())}</b></div></div>
+  return `<div class="card kv"><div><span>Disponível</span><b>${eur(spendable())}</b></div><div><span>Poupança</span><b>${eur(savingsTotal())}</b></div><div><span>Investido</span><b>${eur(investedAccounts() + assets())}</b></div><div><span>Dívidas</span><b>${eur(debts())}</b></div><div class="tot"><span>Património líquido</span><b>${eur(netWorth())}</b></div></div>
   <h2>Investimentos e dívidas</h2>${list}<button class="btn main" data-act="new" style="margin-top:8px">+ Novo investimento / dívida</button>
   <p class="note">O valor atual é introduzido por ti. O dinheiro investido fica separado do disponível para gastar.</p>`;
 }
@@ -387,20 +412,25 @@ const QKEYS = {
   investimentos: ['etf', 'acoes', 'cripto', 'bitcoin', 'investimento'],
 };
 // Raízes dos verbos, para apanhar todas as formas (transferi, transferir, transferência…).
-const INCOME_RE = /(^|[^a-z0-9])(receb\w*|ganh\w*|vend\w*|salario|ordenado|receita|entrada|reembols\w*|devolu\w*|mesada|premio|subsidio|rendimento|bonus)([^a-z0-9]|$)/;
+const INCOME_RE = /(^|[^a-z0-9])(receb\w*|ganh\w*|vend\w*|salario|ordenado|receita|reembols\w*|devolu\w*|mesada|premio|subsidio|rendimento|bonus)([^a-z0-9]|$)/;
 const TRANSFER_RE = /(^|[^a-z0-9])(transfer\w*|pass(ei|ar|o)|mand(ei|ar)|deposit(ei|ar)|levant(ei|ar)|poup(ei|ar)|guard(ei|ar)|envi(ei|ar))([^a-z0-9]|$)/;
 const FILLER = new Set(['quero', 'queria', 'vou', 'preciso', 'transferir', 'transferencia', 'transferencias', 'passar', 'mandar', 'depositar', 'levantar', 'poupar', 'poupei', 'guardar', 'guardei', 'enviar', 'enviei', 'receber', 'recebimento', 'gastar', 'pagar', 'comprar', 'gastei', 'gasto', 'gastos', 'paguei', 'pago', 'comprei', 'recebi', 'ganhei', 'transferi', 'passei', 'mandei', 'depositei', 'levantei', 'de', 'do', 'da', 'dos', 'das', 'no', 'na', 'nos', 'nas', 'em', 'num', 'numa', 'um', 'uma', 'para', 'com', 'a', 'o', 'as', 'os', 'por', 'euro', 'euros', 'eur', '+', '-', 'ontem', 'anteontem', 'hoje']);
-const hasWord = (n, k) => new RegExp('(^|[^a-z0-9])' + k + '([^a-z0-9]|$)').test(n);
+const hasWord = (n, k) => new RegExp('(^|[^a-z0-9])' + k + 's?([^a-z0-9]|$)').test(n); // aceita o plural («cafés»)
 
 function parseQuick(raw) {
   const text = raw.trim(), n = norm(text);
-  const m = text.match(/(\d{1,3}(?:\.\d{3})+(?:,\d{1,2})?|\d+(?:[.,]\d{1,2})?)/);
-  if (!m) return null;
-  const amount = Number(m[1].replace(/\.(?=\d{3}(,|$))/g, '').replace(',', '.'));
-  if (!Number.isFinite(amount) || amount <= 0) return null;
-  // contas mencionadas, pela ordem em que aparecem no texto
-  const mentioned = db.accounts.map(a => ({ a, i: n.indexOf(norm(a.name)) })).filter(x => x.i >= 0 && norm(x.a.name).length > 1).sort((x, y) => x.i - y.i).map(x => x.a);
-  const toAccount = mentioned.some(a => new RegExp('(^|[^a-z0-9])para (a |o |a minha |o meu )?' + norm(a.name).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).test(n));
+  const re = /\d{1,3}(?:\.\d{3})+(?:,\d{1,2})?|\d+(?:[.,]\d{1,2})?/g;
+  const cands = [...text.matchAll(re)].map(x => ({ str: x[0], i: x.index, val: Number(x[0].replace(/\.(?=\d{3}(,|$))/g, '').replace(',', '.')) })).filter(c => Number.isFinite(c.val) && c.val > 0);
+  if (!cands.length) return null;
+  // vários números («2 cafés 3,50»): o que tem € ou «euros», senão o que tem decimais, senão o maior
+  const near = c => /^\s*(€|eur\b|euro)/i.test(text.slice(c.i + c.str.length)) || /€\s*$/.test(text.slice(0, c.i));
+  const chosen = cands.find(near) || cands.find(c => /[.,]\d{1,2}$/.test(c.str)) || cands.reduce((a, c) => (c.val > a.val ? c : a));
+  const amount = chosen.val;
+  const rx = a => a.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  // contas mencionadas (palavra inteira), pela ordem em que aparecem
+  const mentioned = db.accounts.map(a => { const m = new RegExp('(^|[^a-z0-9])' + rx(norm(a.name)) + '([^a-z0-9]|$)').exec(n); return { a, i: m ? m.index + m[1].length : -1 }; })
+    .filter(x => x.i >= 0).sort((x, y) => x.i - y.i).map(x => x.a);
+  const toAccount = mentioned.some(a => new RegExp('(^|[^a-z0-9])para (a |o |a minha |o meu )?' + rx(norm(a.name)) + '([^a-z0-9]|$)').test(n));
   let kind = 'expense';
   if (TRANSFER_RE.test(n)) kind = 'transfer';
   else if (/^\s*\+/.test(text) || INCOME_RE.test(n)) kind = 'income';
@@ -416,11 +446,8 @@ function parseQuick(raw) {
   } else if (mentioned.length) accountId = mentioned[0].id;
   let date = today();
   if (hasWord(n, 'anteontem')) date = plusDays(-2); else if (hasWord(n, 'ontem')) date = plusDays(-1);
-  let toks = text.replace(m[1], ' ').replace(/€/g, ' ').split(/\s+/).filter(Boolean);
-  while (toks.length && FILLER.has(norm(toks[0]))) toks.shift();
-  while (toks.length && FILLER.has(norm(toks[toks.length - 1]))) toks.pop();
+  let toks = (text.slice(0, chosen.i) + ' ' + text.slice(chosen.i + chosen.str.length)).replace(/€/g, ' ').split(/\s+/).filter(Boolean);
   toks = toks.filter(t => !['ontem', 'anteontem', 'hoje'].includes(norm(t)));
-  // o nome das contas escolhidas não faz parte da descrição
   const accWords = new Set(mentioned.flatMap(a => norm(a.name).split(/\s+/)));
   toks = toks.filter(t => !accWords.has(norm(t)));
   while (toks.length && FILLER.has(norm(toks[0]))) toks.shift();
@@ -516,8 +543,8 @@ const optMoney = raw => (raw.trim() === '' ? 0 : parseMoney(raw));
 function saveForm() {
   const { type, id } = form;
   if (type === 'account') {
-    const name = val('name').trim(), amount = parseMoney(val('amount'));
-    if (!name || amount === null) return showErr('Indica o nome e um saldo válido (ex.: 120,50).');
+    const name = val('name').trim(), amount = parseMoney(val('amount'), true);
+    if (!name || amount === null) return showErr('Indica o nome e um saldo válido (ex.: 120,50). Para uma conta a descoberto ou cartão, usa um valor negativo (ex.: -80).');
     if (id) Object.assign(acc(id), { name, kind: val('kind'), opening: amount }); else db.accounts.push({ id: uid(), name, kind: val('kind'), opening: amount });
   } else if (type === 'entry' || type === 'rec') {
     const amount = parseMoney(val('amount')), kind = form.kind, isRec = type === 'rec';
@@ -527,7 +554,9 @@ function saveForm() {
     const base = { kind, amount, accountId: val('account'), destId: kind === 'transfer' ? val('dest') : null, category: kind === 'expense' ? val('category') : 'outros', goalId: kind !== 'income' && val('goal') ? val('goal') : null };
     if (isRec) {
       const next = val('date') || today(), r = { id: id || uid(), name: val('name').trim(), ...base, freq: val('freq'), next, day: +next.slice(8, 10), active: val('active') === '1' };
-      if (id) { const old = db.recurring.find(x => x.id === id); r.day = next === old.next ? old.day : r.day; db.recurring[db.recurring.findIndex(x => x.id === id)] = r; } else db.recurring.push(r);
+      if (id) { const old = db.recurring.find(x => x.id === id); r.day = next === old.next ? old.day : r.day;
+        // ao reativar uma regra pausada, salta o tempo parado em vez de criar todas as cobranças em atraso
+        if (!old.active && r.active) { let g = 0; while (r.next < today() && g++ < 1000) r.next = advance(r); } db.recurring[db.recurring.findIndex(x => x.id === id)] = r; } else db.recurring.push(r);
       applyRecurring();
     } else {
       const old = id ? db.entries.find(x => x.id === id) : null;
@@ -537,6 +566,7 @@ function saveForm() {
   } else if (type === 'budget') {
     const limit = parseMoney(val('amount')), category = val('category');
     if (!limit) return showErr('Indica um limite maior que zero.');
+    if (db.budgets.some(b => b.category === category && b.id !== id)) return showErr('Já existe um orçamento para esta categoria. Edita esse ou escolhe outra.');
     db.budgets = db.budgets.filter(b => b.category !== category && b.id !== id); db.budgets.push({ id: id || uid(), category, limit });
   } else if (type === 'goal') {
     const name = val('name').trim(), target = parseMoney(val('target')), saved = optMoney(val('saved'));
@@ -583,7 +613,8 @@ function importData(file) {
     try {
       const d = normalize(JSON.parse(r.result));
       if (!confirm(`Importar ${d.accounts.length} conta(s) e ${d.entries.length} movimento(s)? Isto substitui os dados atuais.`)) return;
-      db = d; save(); applyRecurring(); render();
+      const prevDb = db; db = d;
+      try { render(true); save(); applyRecurring(); render(true); } catch (err) { db = prevDb; render(true); return toast('Ficheiro inválido ou com dados que a app não percebe.'); }
     } catch (e) { toast('Ficheiro inválido.'); }
   };
   r.readAsText(file);
@@ -646,7 +677,7 @@ eye.addEventListener('contextmenu', e => e.preventDefault());
 ['pointerup', 'pointercancel', 'touchend', 'touchcancel', 'mouseup'].forEach(t => document.addEventListener(t, () => setReveal(false)));
 let hiddenAt = 0;
 document.addEventListener('visibilitychange', () => {
-  if (document.hidden) { hiddenAt = Date.now(); cover(true); return; }
+  if (document.hidden) { hiddenAt = Date.now(); cover(true); if (privacyOn() && !$('sheet-bg').hidden) closeSheet(); return; }
   cover(false);
   if (getPin() && $('lock').hidden && Date.now() - hiddenAt > 30000) { closeSheet(); showLock('unlock'); }
   applyRecurring(); if ($('sheet-bg').hidden) render(true);
