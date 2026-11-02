@@ -15,12 +15,27 @@ const INV = { etf: 'ETF', acao: 'Ação', cripto: 'Criptomoeda', deposito: 'Dep�
 // ---------- Dados ----------
 let db;
 function empty() { return { accounts: [], entries: [], budgets: [], goals: [], recurring: [], invest: [] }; }
-function load() {
+// Se os dados guardados estiverem danificados, a app não os substitui em silêncio:
+// guarda uma cópia à parte, avisa, e permite exportá-la para tentar recuperar.
+let corruptRaw = null;
+const BACKUP_KEYS = ['accounts', 'entries', 'budgets', 'goals', 'recurring', 'invest'];
+const UNDOKEY = 'poupanca-before-import';
+function quarantine(raw) {
+  corruptRaw = raw;
   try {
-    let d = JSON.parse(localStorage.getItem(KEY));
-    if (!d) { const old = localStorage.getItem('poupanca-v1'); if (old) d = JSON.parse(old); }
-    if (d && d.accounts) return normalize(d);
+    localStorage.setItem('poupanca-corrupt-' + Date.now(), raw);
+    Object.keys(localStorage).filter(k => k.startsWith('poupanca-corrupt-')).sort().slice(0, -3).forEach(k => localStorage.removeItem(k)); // guarda as 3 mais recentes
   } catch (e) {}
+}
+function load() {
+  let raw = null;
+  try { raw = localStorage.getItem(KEY); if (raw === null) raw = localStorage.getItem('poupanca-v1'); } catch (e) {}
+  if (raw === null) return empty();
+  try {
+    const d = JSON.parse(raw);
+    if (d && typeof d === 'object' && Array.isArray(d.accounts)) return normalize(d);
+  } catch (e) {}
+  quarantine(raw);
   return empty();
 }
 function save() { try { localStorage.setItem(KEY, JSON.stringify(db)); } catch (e) { toast('Não foi possível guardar os dados.'); } }
@@ -56,7 +71,7 @@ function normalize(d) {
 
 // ---------- Utilitários ----------
 const uid = () => (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(16).slice(2));
-const VERSION = 'v16';
+const VERSION = 'v18';
 const fmtEur = new Intl.NumberFormat('pt-PT', { style: 'currency', currency: 'EUR' });
 // Modo privado: valores escondidos; só aparecem enquanto manténs o dedo premido no olho.
 // Assim, ao sair da app (e o iOS tirar a imagem do seletor de apps) nunca há valores à vista.
@@ -243,7 +258,7 @@ const $ = id => document.getElementById(id);
 function render(keepScroll) {
   $('tabs').innerHTML = TABS.map(([k, l, i]) => `<button data-tab="${k}" class="${k === tab ? 'on' : ''}"><span>${i}</span>${l}</button>`).join('');
   $('title').textContent = tab === 'home' ? 'Poupança' : TABS.find(t => t[0] === tab)[1];
-  $('eye').hidden = !privacyOn(); $('eye').textContent = reveal ? '🙈' : '👁️';
+  $('eye').hidden = !privacyOn(); $('eye').textContent = reveal ? '🙈' : '👁️'; $('eye').setAttribute('aria-pressed', String(reveal));
   $('add').hidden = tab === 'home' || (tab === 'entries' && !db.accounts.length);
   $('view').innerHTML = { home, entries, budgets, goals, accounts }[tab]();
   if (!keepScroll) window.scrollTo(0, 0);
@@ -372,9 +387,9 @@ function accounts() {
     ? `<div class="list">${db.accounts.map(a => `<button class="item" data-edit-account="${a.id}"><div class="ico">${KINDS[a.kind][1]}</div><div class="grow"><div>${esc(a.name)}</div><div class="sub">${KINDS[a.kind][0]}</div></div><div class="amt">${eur(balance(a))}</div></button>`).join('')}</div>`
     : emptyBox('💳', 'Toca em + para adicionar a primeira conta.');
   return `${seg}${list}<p class="note">Introduz o saldo atual. Transferências entre contas não contam como despesa. Toca numa conta para ver o histórico.</p>
-  <h2>Cópia de segurança</h2><div class="card"><p class="sub" style="margin-top:0">Os dados ficam só neste telemóvel. Exporta uma cópia todos os meses e guarda o ficheiro no iCloud ou nos Ficheiros.</p>
+  <h2>Cópia de segurança</h2><div class="card"><p class="sub" style="margin-top:0">Os dados ficam só neste telemóvel. Exporta uma cópia todos os meses e guarda o ficheiro num sítio seguro fora da app (iCloud ou Ficheiros no iPhone, Google Drive ou Ficheiros no Android).</p>
   <div class="alert ${backupStatus().tone}" style="margin:8px 0 0">${backupStatus().icon} ${backupStatus().text}</div>
-  <div class="btns" style="margin-top:8px"><button class="btn" data-act="export">Exportar</button><button class="btn" data-act="import">Importar</button></div></div><input id="file" type="file" accept=".json,application/json" hidden>
+  <div class="btns" style="margin-top:8px"><button class="btn" data-act="export">Exportar</button><button class="btn" data-act="import">Importar</button></div>${(() => { try { return localStorage.getItem(UNDOKEY) ? '<button class="btn" data-act="undo-import" style="width:100%;margin-top:8px">Desfazer a última importação</button>' : ''; } catch (e) { return ''; } })()}</div><input id="file" type="file" accept=".json,application/json" hidden>
   <h2>Segurança</h2><div class="card"><div class="between" style="margin-bottom:10px"><div><b>Modo privado</b><div class="sub">Esconde os valores (••••). Mantém o dedo premido no 👁️ para os ver; ao largares, escondem-se logo.</div></div><button class="btn ${privacyOn() ? 'main' : ''}" data-act="privacy" style="flex:none;padding:8px 14px">${privacyOn() ? 'Ligado' : 'Desligado'}</button></div>
   <div style="border-top:1px solid var(--line);padding-top:10px"></div><p class="sub" style="margin-top:0">${getPin() ? '🔒 PIN ativo. A app bloqueia ao abrir e depois de 30 segundos fora dela.' : 'Protege a app com um PIN de 6 dígitos. É um bloqueio de ecrã: impede que outra pessoa abra a app no teu telemóvel.'}</p>
   <div class="btns" style="margin-top:8px">${getPin() ? '<button class="btn" data-act="pin-change">Alterar PIN</button><button class="btn del" data-act="pin-remove">Remover PIN</button>' : '<button class="btn main" data-act="pin-set">Definir PIN</button>'}</div></div>
@@ -402,7 +417,7 @@ function investView() {
 
 
 // ---------- Registo rápido por texto (interpretado no telemóvel, nada sai daqui) ----------
-const norm = t => t.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+const norm = t => t.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/['’`´]/g, '');
 const QKEYS = {
   restaurantes: ['cafe', 'restaurante', 'jantar', 'almoco', 'pizza', 'hamburguer', 'pastelaria', 'snack', 'sushi', 'bifana', 'pequeno almoco', 'lanche', 'gelado', 'cerveja', 'tasca', 'mcdonalds'],
   alimentacao: ['supermercado', 'mercearia', 'talho', 'peixaria', 'mercado', 'lidl', 'continente', 'aldi', 'minipreco', 'pingo doce', 'intermarche', 'padaria', 'fruta', 'compras do mes'],
@@ -417,7 +432,7 @@ const QKEYS = {
   investimentos: ['etf', 'acoes', 'cripto', 'bitcoin', 'investimento'],
 };
 // Raízes dos verbos, para apanhar todas as formas (transferi, transferir, transferência…).
-const INCOME_RE = /(^|[^a-z0-9])(receb\w*|ganh\w*|vend\w*|salario|ordenado|receita|reembols\w*|devolu\w*|mesada|premio|subsidio|rendimento|bonus)([^a-z0-9]|$)/;
+const INCOME_RE = /(^|[^a-z0-9])(receb\w*|ganh\w*|vend\w*|salario|ordenado|reembols\w*|devolu\w*|mesada|premio|subsidio|rendimento|bonus)([^a-z0-9]|$)/;
 const TRANSFER_RE = /(^|[^a-z0-9])(transfer\w*|pass(ei|ar|o)|mand(ei|ar)|deposit(ei|ar)|levant(ei|ar)|poup(ei|ar)|guard(ei|ar)|envi(ei|ar))([^a-z0-9]|$)/;
 const FILLER = new Set(['quero', 'queria', 'vou', 'preciso', 'transferir', 'transferencia', 'transferencias', 'passar', 'mandar', 'depositar', 'levantar', 'poupar', 'poupei', 'guardar', 'guardei', 'enviar', 'enviei', 'receber', 'recebimento', 'gastar', 'pagar', 'comprar', 'gastei', 'gasto', 'gastos', 'paguei', 'pago', 'comprei', 'recebi', 'ganhei', 'transferi', 'passei', 'mandei', 'depositei', 'levantei', 'de', 'do', 'da', 'dos', 'das', 'no', 'na', 'nos', 'nas', 'em', 'num', 'numa', 'um', 'uma', 'para', 'com', 'a', 'o', 'as', 'os', 'por', 'euro', 'euros', 'eur', '+', '-', 'ontem', 'anteontem', 'hoje']);
 const hasWord = (n, k) => new RegExp('(^|[^a-z0-9])' + k + 's?([^a-z0-9]|$)').test(n); // aceita o plural («cafés»)
@@ -439,6 +454,8 @@ function parseQuick(raw) {
   let kind = 'expense';
   if (TRANSFER_RE.test(n)) kind = 'transfer';
   else if (/^\s*\+/.test(text) || INCOME_RE.test(n)) kind = 'income';
+  // «receita» sozinha é ambígua (receita médica): só conta como entrada de dinheiro sem categoria de despesa à vista
+  else if (/(^|[^a-z0-9])receitas?([^a-z0-9]|$)/.test(n) && !/medic/.test(n) && !Object.values(QKEYS).some(ks => ks.some(k => hasWord(n, k)))) kind = 'income';
   else if (toAccount) kind = 'transfer'; // «100 para poupança»
   let category = 'outros';
   if (kind === 'expense') for (const [c, ks] of Object.entries(QKEYS)) if (ks.some(k => hasWord(n, k))) { category = c; break; }
@@ -470,7 +487,10 @@ function quickAdd() {
 }
 
 // ---------- Formulários (folha inferior) ----------
-function openSheet(html) { $('sheet').innerHTML = html; $('sheet-bg').hidden = false; }
+function openSheet(html) {
+  $('sheet').innerHTML = html; $('sheet-bg').hidden = false;
+  if (masked()) $('sheet').querySelectorAll('input[inputmode=decimal]').forEach(i => { if (i.value) { i.classList.add('sec'); i.addEventListener('focus', () => i.classList.remove('sec'), { once: true }); } });
+}
 function closeSheet() { $('sheet-bg').hidden = true; $('sheet').innerHTML = ''; }
 const opts = (obj, sel) => Object.entries(obj).map(([k, v]) => `<option value="${k}" ${k === sel ? 'selected' : ''}>${Array.isArray(v) ? v[1] + ' ' + v[0] : v}</option>`).join('');
 const accOpts = (sel, blank) => (blank ? '<option value="">Selecionar</option>' : '') + db.accounts.map(a => `<option value="${a.id}" ${a.id === sel ? 'selected' : ''}>${esc(a.name)}</option>`).join('');
@@ -480,7 +500,7 @@ function toast(m) {
   t.textContent = m; t.classList.add('on'); clearTimeout(toast.t); toast.t = setTimeout(() => t.classList.remove('on'), 3500);
 }
 const showErr = m => { const e = document.getElementById('err'); if (e) { e.textContent = m; e.scrollIntoView({ block: 'nearest' }); } };
-const buttons = id => `<div id="err" class="formerr"></div><div class="btns">${id ? '<button class="btn del" data-act="delete">Apagar</button>' : ''}<button class="btn" data-act="cancel">Cancelar</button><button class="btn main" data-act="save">Guardar</button></div>`;
+const buttons = id => `<div class="actionbar"><div id="err" class="formerr"></div><div class="btns">${id ? '<button class="btn del" data-act="delete">Apagar</button>' : ''}<button class="btn" data-act="cancel">Cancelar</button><button class="btn main" data-act="save">Guardar</button></div></div></div>`;
 const val = n => document.querySelector(`#sheet [name=${n}]`).value;
 let form = null;
 
@@ -612,17 +632,46 @@ function exportData() {
   const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = f.name; a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 5000); markBackup();
 }
+function validBackup(d) {
+  if (!d || typeof d !== 'object' || Array.isArray(d) || !Array.isArray(d.accounts)) return false;
+  return BACKUP_KEYS.every(k => !(k in d) || Array.isArray(d[k]));
+}
 function importData(file) {
   const r = new FileReader();
+  r.onerror = () => toast('Não foi possível ler o ficheiro.');
   r.onload = () => {
-    try {
-      const d = normalize(JSON.parse(r.result));
-      if (!confirm(`Importar ${d.accounts.length} conta(s) e ${d.entries.length} movimento(s)? Isto substitui os dados atuais.`)) return;
-      const prevDb = db; db = d;
-      try { render(true); save(); applyRecurring(); render(true); } catch (err) { db = prevDb; render(true); return toast('Ficheiro inválido ou com dados que a app não percebe.'); }
-    } catch (e) { toast('Ficheiro inválido.'); }
+    let parsed;
+    try { parsed = JSON.parse(r.result); } catch (e) { return toast('Este ficheiro não é uma cópia de segurança válida.'); }
+    if (!validBackup(parsed)) return toast('Este ficheiro não parece uma cópia de segurança da Poupança.');
+    if (!BACKUP_KEYS.some(k => (parsed[k] || []).length)) return toast('O ficheiro está vazio (sem contas nem movimentos). Não foi importado.');
+    if (!parsed.accounts.length && (parsed.entries || []).length) return toast('O ficheiro tem movimentos mas nenhuma conta. Não foi importado.');
+    let d;
+    try { d = normalize(parsed); } catch (e) { return toast('Ficheiro inválido ou com dados que a app não percebe.'); }
+    if (!confirm(`Importar ${d.accounts.length} conta(s), ${d.entries.length} movimento(s), ${d.budgets.length} orçamento(s) e ${d.goals.length} objetivo(s)? Isto substitui os dados atuais (podes desfazer a seguir em Contas).`)) return;
+    const prevDb = db;
+    if (prevDb.accounts.length || prevDb.entries.length || prevDb.goals.length) { try { localStorage.setItem(UNDOKEY, JSON.stringify(prevDb)); } catch (e) {} }
+    db = d;
+    try { render(true); save(); applyRecurring(); render(true); } catch (err) { db = prevDb; render(true); return toast('Ficheiro inválido ou com dados que a app não percebe.'); }
+    toast('Cópia importada.');
   };
   r.readAsText(file);
+}
+function undoImport() {
+  let raw = null; try { raw = localStorage.getItem(UNDOKEY); } catch (e) {}
+  if (!raw) return;
+  if (!confirm('Repor os dados que tinhas antes da última importação? Os dados atuais serão substituídos.')) return;
+  try { db = normalize(JSON.parse(raw)); localStorage.removeItem(UNDOKEY); save(); render(true); toast('Dados anteriores repostos.'); } catch (e) { toast('Não foi possível repor.'); }
+}
+function saveText(name, text) {
+  const f = new File([text], name, { type: 'application/json' });
+  if (navigator.canShare && navigator.canShare({ files: [f] })) { navigator.share({ files: [f] }).catch(() => {}); return; }
+  const a = document.createElement('a'); a.href = URL.createObjectURL(f); a.download = name; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+}
+function corruptNotice() {
+  openSheet(`<h3>⚠️ Dados danificados</h3>
+  <p class="sub" style="font-size:15px">Os dados guardados neste telemóvel não puderam ser lidos. <b>Não foram apagados</b>: ficou uma cópia à parte. Exporta-a agora, para a poderes recuperar, e depois podes importar uma cópia de segurança em Contas.</p>
+  <button class="btn main" data-act="export-corrupt" style="width:100%;margin-top:12px">Exportar os dados danificados</button>
+  <button class="btn" data-act="welcome-close" style="width:100%;margin:10px 0 calc(env(safe-area-inset-bottom) + 20px)">Continuar com a app vazia</button>`);
 }
 
 // ---------- Eventos ----------
@@ -660,11 +709,13 @@ document.addEventListener('click', ev => {
   else if (d.act === 'privacy') { try { localStorage.setItem(PRIVKEY, privacyOn() ? '0' : '1'); } catch (e) {} reveal = false; render(true); }
   else if (d.act === 'pin-forgot') { if (confirm('Esqueceste o PIN? Para entrar tens de apagar TODOS os dados deste telemóvel (só recuperas com uma cópia de segurança). Apagar?')) { [KEY, 'poupanca-v1', PINKEY, LOCKKEY].forEach(k => localStorage.removeItem(k)); location.reload(); } }
   else if (d.act === 'export') exportData();
+  else if (d.act === 'export-corrupt') saveText(`poupanca-danificado-${today()}.json`, corruptRaw || '');
+  else if (d.act === 'undo-import') undoImport();
   else if (d.act === 'import') $('file').click();
 });
 document.addEventListener('change', ev => {
   const t = ev.target;
-  if (t.id === 'file' && t.files[0]) importData(t.files[0]);
+  if (t.id === 'file') { const f = t.files[0]; t.value = ''; if (f) importData(f); } // limpa o campo: permite escolher o mesmo ficheiro outra vez
   else if (t.dataset.f) { ui.f[t.dataset.f] = t.value; render(true); }
 });
 document.addEventListener('keydown', ev => { if (ev.key === 'Enter' && ev.target.id === 'qa') { ev.preventDefault(); quickAdd(); } });
@@ -677,9 +728,22 @@ window.addEventListener('focus', () => cover(false));
 window.addEventListener('pageshow', () => cover(false));
 $('cover').addEventListener('click', () => { if (!document.hidden) cover(false); });
 const eye = $('eye');
-eye.addEventListener('pointerdown', e => { e.preventDefault(); setReveal(true); });
+let ptrSinceClick = false, assist = false, assistTimer = null;
+eye.addEventListener('pointerdown', e => { ptrSinceClick = true; e.preventDefault(); assist = false; clearTimeout(assistTimer); setReveal(true); });
 eye.addEventListener('contextmenu', e => e.preventDefault());
-['pointerup', 'pointercancel', 'touchend', 'touchcancel', 'mouseup'].forEach(t => document.addEventListener(t, () => setReveal(false)));
+['pointerup', 'pointercancel', 'touchend', 'touchcancel', 'mouseup'].forEach(t => document.addEventListener(t, () => { if (!assist) setReveal(false); }));
+// O clique que o navegador gera ao largar o dedo/rato não conta. Só o teclado (Enter/Espaço), que não passa por
+// «dedo premido», mostra os valores durante 15 s. Quem usa leitor de ecrã pode desligar o Modo privado em Contas → Segurança.
+eye.addEventListener('click', () => {
+  if (ptrSinceClick) { ptrSinceClick = false; return; }
+  clearTimeout(assistTimer); assist = !reveal;
+  if (assist) assistTimer = setTimeout(() => { assist = false; setReveal(false); }, 15000);
+  setReveal(assist);
+});
+document.addEventListener('keydown', ev => {
+  if ($('lock').hidden) return;
+  if (/^\d$/.test(ev.key)) pinKey(ev.key); else if (ev.key === 'Backspace') pinKey('del');
+});
 let hiddenAt = 0;
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) { hiddenAt = Date.now(); cover(true); if (privacyOn() && !$('sheet-bg').hidden) closeSheet(); return; }
@@ -704,9 +768,9 @@ function welcome() {
   <div class="wl"><span>👁️</span><div><b>Modo privado.</b> Os valores estão escondidos (••••). Mantém o dedo premido no olho para os ver.</div></div>
   ${install ? `<div class="wl"><span>📲</span><div><b>Instalar.</b> ${install}</div></div>` : ''}
   <div class="wl"><span>⚠️</span><div><b>Uma app pessoal.</b> Não é aconselhamento financeiro nem tem segurança profissional. O PIN só bloqueia o ecrã. Não guardes aqui palavras-passe nem números de cartões.</div></div>
-  <button class="btn main" data-act="welcome-close" style="width:100%;margin-top:16px">Começar</button>`);
+  <button class="btn main" data-act="welcome-close" style="width:100%;margin:16px 0 calc(env(safe-area-inset-bottom) + 20px)">Começar</button>`);
 }
-const needsWelcome = () => { try { return !localStorage.getItem(WELCOME_KEY) && !db.accounts.length && !db.entries.length; } catch (e) { return false; } };
+const needsWelcome = () => { try { return corruptRaw === null && !localStorage.getItem(WELCOME_KEY) && !db.accounts.length && !db.entries.length; } catch (e) { return false; } };
 
 // ---------- PIN ----------
 const PINKEY = 'poupanca-pin', LOCKKEY = 'poupanca-lockuntil', PINLEN = 6;
@@ -717,13 +781,19 @@ async function hashPin(pin, salt) {
   return [...new Uint8Array(bits)].map(x => x.toString(16).padStart(2, '0')).join('');
 }
 let L = { mode: '', buf: '', first: '', msg: '', fails: 0, onOk: null, busy: false };
-function showLock(mode, onOk) { L = { mode, buf: '', first: '', msg: '', fails: 0, onOk, busy: false }; $('lock').hidden = false; drawLock(); }
-function hideLock() { $('lock').hidden = true; $('lock').innerHTML = ''; }
+function showLock(mode, onOk) { L = { mode, buf: '', first: '', msg: '', fails: 0, onOk, busy: false }; $('lock').hidden = false; ['top', 'view', 'tabs', 'sheet-bg'].forEach(i => { $(i).inert = true; }); drawLock(); }
+function hideLock() {
+  $('lock').hidden = true; $('lock').innerHTML = ''; ['top', 'view', 'tabs', 'sheet-bg'].forEach(i => { $(i).inert = false; });
+  if (corruptRaw !== null && L.mode === 'unlock' && $('sheet-bg').hidden) corruptNotice(); // aviso de dados danificados depois de desbloquear
+}
 function drawLock() {
+  const had = document.activeElement && $('lock').contains(document.activeElement) ? document.activeElement.dataset.pin || document.activeElement.dataset.act : null;
   const t = { unlock: 'Introduz o PIN', verify: 'Introduz o PIN atual', set1: 'Escolhe um PIN de 6 dígitos', set2: 'Repete o PIN' }[L.mode];
   $('lock').innerHTML = `<div class="lockbox"><div class="lockico">🔒</div><h2>${t}</h2><div class="dots">${Array.from({ length: PINLEN }, (_, i) => `<i class="${i < L.buf.length ? 'on' : ''}"></i>`).join('')}</div><div class="lockmsg">${L.msg}</div>
   <div class="pad">${[1, 2, 3, 4, 5, 6, 7, 8, 9].map(n => `<button data-pin="${n}">${n}</button>`).join('')}<span></span><button data-pin="0">0</button><button data-pin="del" aria-label="Apagar">⌫</button></div>
   ${L.mode === 'unlock' ? '<button class="linkbtn" data-act="pin-forgot">Esqueci-me do PIN</button>' : '<button class="linkbtn" data-act="pin-cancel">Cancelar</button>'}</div>`;
+  const again = had && $('lock').querySelector(`[data-pin="${had}"],[data-act="${had}"]`);
+  (again || $('lock').querySelector('[data-pin="1"]')).focus();
 }
 async function pinKey(k) {
   if (L.busy) return;
@@ -750,12 +820,17 @@ async function pinKey(k) {
   L.busy = false; drawLock();
 }
 
-// Bloqueia o zoom por pinça no iOS (o toque duplo é tratado por touch-action: manipulation no CSS).
-['gesturestart', 'gesturechange', 'gestureend'].forEach(g => document.addEventListener(g, e => e.preventDefault()));
 
 db = load();
 if (getPin()) showLock('unlock');
 applyRecurring();
 render();
-if (needsWelcome() && $('lock').hidden) welcome();
+if (corruptRaw !== null && $('lock').hidden) corruptNotice();
+else if (needsWelcome() && $('lock').hidden) welcome();
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+
+// Com o teclado aberto, o formulário ocupa só a parte visível do ecrã (os botões ficam à vista).
+if (window.visualViewport) {
+  const fit = () => { const v = window.visualViewport, bg = $('sheet-bg'); bg.style.top = v.offsetTop + 'px'; bg.style.bottom = 'auto'; bg.style.height = v.height + 'px'; };
+  window.visualViewport.addEventListener('resize', fit); window.visualViewport.addEventListener('scroll', fit); fit();
+}

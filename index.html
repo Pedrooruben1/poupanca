@@ -2,7 +2,7 @@
 <html lang="pt-PT">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Poupança</title>
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; base-uri 'none'; form-action 'none'; object-src 'none'">
 <meta name="theme-color" content="#124738">
@@ -16,11 +16,11 @@
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
-<header id="top"><h1 id="title">Poupança</h1><div class="hr"><button id="eye" aria-label="Mostrar ou esconder valores">👁️</button><button id="add" aria-label="Adicionar">+</button></div></header>
+<header id="top"><h1 id="title">Poupança</h1><div class="hr"><button id="eye" aria-label="Mostrar valores (mantém premido; com leitor de ecrã, toca duas vezes)" aria-pressed="false">👁️</button><button id="add" aria-label="Adicionar">+</button></div></header>
 <main id="view"></main>
 <nav id="tabs"></nav>
 <div id="cover"><div>🔒<br>Poupança</div></div>
-<div id="lock" hidden></div>
+<div id="lock" hidden role="dialog" aria-modal="true" aria-label="Bloqueio com PIN"></div>
 <div id="sheet-bg" hidden><div id="sheet" role="dialog"></div></div>
 <script src="app.js"></script>
 </body>

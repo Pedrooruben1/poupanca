@@ -118,3 +118,23 @@ input[type=date]::-webkit-date-and-time-value{text-align:left;min-height:1.2em}
 .qarow .btn{flex:none;padding:0 16px}
 .wl{display:flex;gap:12px;margin:12px 0;font-size:15px;line-height:1.4}
 .wl>span{font-size:22px;flex:none}
+
+/* ---- v17: contraste, alvos de toque, ecrãs pequenos, formulários ---- */
+:root{--green:#17803f;--warnt:#b45309;--btn:#124738;--btn2:#216e54}
+@media(prefers-color-scheme:dark){:root{--green:#2fb86b;--warnt:#f59e0b;--btn:#1b6b50;--btn2:#23805f}}
+.btn.main,#add{background:var(--btn)}
+.btn.alt{background:var(--btn2)}
+.warnt{color:var(--warnt)}
+#add,#eye{width:44px;height:44px}
+.step button{width:44px;height:44px}
+.seg button{min-height:44px}
+.btn{min-height:44px}
+.linkbtn{min-height:44px;padding:0 16px}
+nav button{min-height:52px}
+.hero b{font-size:clamp(26px,9vw,36px);overflow-wrap:anywhere}
+.metric b,.kv b,.amt{overflow-wrap:anywhere}
+input.sec{-webkit-text-security:disc;text-security:disc}
+#sheet{padding-bottom:0}
+.actionbar{position:sticky;bottom:0;background:var(--bg);padding:8px 0 calc(env(safe-area-inset-bottom) + 12px);margin-top:12px;border-top:1px solid var(--line)}
+.actionbar .btns{margin-top:0}
+.actionbar .formerr{margin-top:0;padding-bottom:4px}
