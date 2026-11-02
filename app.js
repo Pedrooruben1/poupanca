@@ -46,7 +46,7 @@ function normalize(d) {
 
 // ---------- Utilitários ----------
 const uid = () => (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(16).slice(2));
-const VERSION = 'v11';
+const VERSION = 'v12';
 const fmtEur = new Intl.NumberFormat('pt-PT', { style: 'currency', currency: 'EUR' });
 // Modo privado: valores escondidos; só aparecem enquanto manténs o dedo premido no olho.
 // Assim, ao sair da app (e o iOS tirar a imagem do seletor de apps) nunca há valores à vista.
@@ -386,9 +386,10 @@ const QKEYS = {
   compras: ['zara', 'roupa', 'sapatos', 'amazon', 'aliexpress', 'compras', 'presente', 'prenda', 'worten', 'fnac'],
   investimentos: ['etf', 'acoes', 'cripto', 'bitcoin', 'investimento'],
 };
-const INCOME_WORDS = ['recebi', 'receita', 'salario', 'ordenado', 'ganhei', 'entrada', 'reembolso', 'devolucao', 'mesada', 'premio', 'subsidio', 'rendimento', 'vendi', 'venda', 'bonus', 'ferias pagas'];
-const TRANSFER_WORDS = ['transferi', 'transferencia', 'passei', 'mandei', 'depositei', 'levantei'];
-const FILLER = new Set(['gastei', 'gasto', 'gastos', 'paguei', 'pago', 'comprei', 'recebi', 'ganhei', 'transferi', 'passei', 'mandei', 'depositei', 'levantei', 'de', 'do', 'da', 'dos', 'das', 'no', 'na', 'nos', 'nas', 'em', 'num', 'numa', 'um', 'uma', 'para', 'com', 'a', 'o', 'as', 'os', 'por', 'euro', 'euros', 'eur', '+', '-', 'ontem', 'anteontem', 'hoje']);
+// Raízes dos verbos, para apanhar todas as formas (transferi, transferir, transferência…).
+const INCOME_RE = /(^|[^a-z0-9])(receb\w*|ganh\w*|vend\w*|salario|ordenado|receita|entrada|reembols\w*|devolu\w*|mesada|premio|subsidio|rendimento|bonus)([^a-z0-9]|$)/;
+const TRANSFER_RE = /(^|[^a-z0-9])(transfer\w*|pass(ei|ar|o)|mand(ei|ar)|deposit(ei|ar)|levant(ei|ar)|poup(ei|ar)|guard(ei|ar)|envi(ei|ar))([^a-z0-9]|$)/;
+const FILLER = new Set(['quero', 'queria', 'vou', 'preciso', 'transferir', 'transferencia', 'transferencias', 'passar', 'mandar', 'depositar', 'levantar', 'poupar', 'poupei', 'guardar', 'guardei', 'enviar', 'enviei', 'receber', 'recebimento', 'gastar', 'pagar', 'comprar', 'gastei', 'gasto', 'gastos', 'paguei', 'pago', 'comprei', 'recebi', 'ganhei', 'transferi', 'passei', 'mandei', 'depositei', 'levantei', 'de', 'do', 'da', 'dos', 'das', 'no', 'na', 'nos', 'nas', 'em', 'num', 'numa', 'um', 'uma', 'para', 'com', 'a', 'o', 'as', 'os', 'por', 'euro', 'euros', 'eur', '+', '-', 'ontem', 'anteontem', 'hoje']);
 const hasWord = (n, k) => new RegExp('(^|[^a-z0-9])' + k + '([^a-z0-9]|$)').test(n);
 
 function parseQuick(raw) {
@@ -397,13 +398,15 @@ function parseQuick(raw) {
   if (!m) return null;
   const amount = Number(m[1].replace(/\.(?=\d{3}(,|$))/g, '').replace(',', '.'));
   if (!Number.isFinite(amount) || amount <= 0) return null;
-  let kind = 'expense';
-  if (TRANSFER_WORDS.some(w => hasWord(n, w))) kind = 'transfer';
-  else if (/^\s*\+/.test(text) || INCOME_WORDS.some(w => hasWord(n, w))) kind = 'income';
-  let category = 'outros';
-  if (kind === 'expense') for (const [c, ks] of Object.entries(QKEYS)) if (ks.some(k => hasWord(n, k))) { category = c; break; }
   // contas mencionadas, pela ordem em que aparecem no texto
   const mentioned = db.accounts.map(a => ({ a, i: n.indexOf(norm(a.name)) })).filter(x => x.i >= 0 && norm(x.a.name).length > 1).sort((x, y) => x.i - y.i).map(x => x.a);
+  const toAccount = mentioned.some(a => new RegExp('(^|[^a-z0-9])para (a |o |a minha |o meu )?' + norm(a.name).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).test(n));
+  let kind = 'expense';
+  if (TRANSFER_RE.test(n)) kind = 'transfer';
+  else if (/^\s*\+/.test(text) || INCOME_RE.test(n)) kind = 'income';
+  else if (toAccount) kind = 'transfer'; // «100 para poupança»
+  let category = 'outros';
+  if (kind === 'expense') for (const [c, ks] of Object.entries(QKEYS)) if (ks.some(k => hasWord(n, k))) { category = c; break; }
   const lastId = (() => { try { return localStorage.getItem('poupanca-lastacc'); } catch (e) { return null; } })();
   const dflt = acc(lastId) || db.accounts.find(a => a.kind !== 'investimento') || db.accounts[0];
   let accountId = dflt.id, destId = null;
