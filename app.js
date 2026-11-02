@@ -18,6 +18,7 @@ function empty() { return { accounts: [], entries: [], budgets: [], goals: [], r
 // Se os dados guardados estiverem danificados, a app não os substitui em silêncio:
 // guarda uma cópia à parte, avisa, e permite exportá-la para tentar recuperar.
 let corruptRaw = null;
+let lastRaw = null; // último conteúdo lido ou gravado por esta janela
 const BACKUP_KEYS = ['accounts', 'entries', 'budgets', 'goals', 'recurring', 'invest'];
 const UNDOKEY = 'poupanca-before-import';
 function quarantine(raw) {
@@ -33,12 +34,18 @@ function load() {
   if (raw === null) return empty();
   try {
     const d = JSON.parse(raw);
-    if (d && typeof d === 'object' && Array.isArray(d.accounts)) return normalize(d);
+    if (d && typeof d === 'object' && Array.isArray(d.accounts)) { lastRaw = raw; return normalize(d); }
   } catch (e) {}
   quarantine(raw);
   return empty();
 }
-function save() { try { localStorage.setItem(KEY, JSON.stringify(db)); } catch (e) { toast('Não foi possível guardar os dados.'); } }
+function save() { try { const raw = JSON.stringify(db); localStorage.setItem(KEY, raw); lastRaw = raw; } catch (e) { toast('Não foi possível guardar os dados.'); } }
+// Se outra janela/separador gravou entretanto, lê o que lá está (senão a próxima gravação apagava essas alterações).
+function syncFromStorage() {
+  let raw = null; try { raw = localStorage.getItem(KEY); } catch (e) { return; }
+  if (raw === null || raw === lastRaw) return;
+  try { const d = JSON.parse(raw); if (d && typeof d === 'object' && Array.isArray(d.accounts)) { db = normalize(d); lastRaw = raw; render(true); } } catch (e) {}
+}
 if (navigator.storage && navigator.storage.persist) navigator.storage.persist();
 
 // Aceita dados da versão anterior e o financas.json da app Swift (datas em segundos desde 2001, nomes em português).
@@ -68,20 +75,21 @@ function normalize(d) {
   const date = x => (typeof x === 'number' ? ymd(new Date((x + 978307200) * 1000)) : dateOk(String(x).slice(0, 10)) || today());
   const str = (v, d) => String(v ?? '').slice(0, 200) || d;
   const t = today();
+  const objs = v => (Array.isArray(v) ? v : []).filter(x => x && typeof x === 'object' && !Array.isArray(x)); // ignora itens que não são objetos (ex.: null)
   const pick = (v, table, dflt) => (table[v] ? v : dflt);
   return {
-    accounts: (d.accounts || []).map(a => ({ id: id(a.id), name: str(a.name, 'Conta'), kind: pick(kindMap[a.kind] || a.kind, KINDS, 'ordem'), opening: num0(a.opening ?? a.openingBalance) })),
-    entries: (d.entries || []).map(e => ({ id: id(e.id), date: date(e.date), kind: pick(entryMap[e.kind] || e.kind, ENTRY, 'expense'), amount: Math.abs(num0(e.amount)), accountId: sid(e.accountId ?? e.accountID), destId: sid(e.destId ?? e.destinationID), category: cat(e.category), note: str(e.note, ''), goalId: sid(e.goalId), recId: sid(e.recId) })),
-    budgets: (d.budgets || []).map(b => ({ id: id(b.id), category: cat(b.category), limit: Math.abs(num0(b.limit ?? b.monthlyLimit)) })),
-    goals: (d.goals || []).map(g => ({ id: id(g.id), name: str(g.name, 'Objetivo'), target: Math.abs(num0(g.target)), saved: Math.abs(num0(g.saved)), deadline: dateOk(g.deadline), created: dateOk(g.created) || t, base: Math.abs(num0(g.base ?? g.saved)) })),
-    recurring: (d.recurring || []).map(r => { const next = dateOk(r.next) || t; return { id: id(r.id), name: str(r.name, 'Recorrente'), kind: pick(r.kind, ENTRY, 'expense'), amount: Math.abs(num0(r.amount)), accountId: sid(r.accountId), destId: sid(r.destId), category: cat(r.category), goalId: sid(r.goalId), freq: pick(r.freq, FREQ, 'monthly'), next, day: Math.min(Math.max(Math.round(num0(r.day)) || +next.slice(8, 10), 1), 31), active: r.active !== false }; }),
-    invest: (d.invest || []).map(i => ({ id: id(i.id), name: str(i.name, 'Investimento'), type: pick(i.type, INV, 'outro'), invested: Math.abs(num0(i.invested)), current: Math.abs(num0(i.current)) })),
+    accounts: objs(d.accounts).map(a => ({ id: id(a.id), name: str(a.name, 'Conta'), kind: pick(kindMap[a.kind] || a.kind, KINDS, 'ordem'), opening: num0(a.opening ?? a.openingBalance) })),
+    entries: objs(d.entries).map(e => ({ id: id(e.id), date: date(e.date), kind: pick(entryMap[e.kind] || e.kind, ENTRY, 'expense'), amount: Math.abs(num0(e.amount)), accountId: sid(e.accountId ?? e.accountID), destId: sid(e.destId ?? e.destinationID), category: cat(e.category), note: str(e.note, ''), goalId: sid(e.goalId), recId: sid(e.recId) })),
+    budgets: objs(d.budgets).map(b => ({ id: id(b.id), category: cat(b.category), limit: Math.abs(num0(b.limit ?? b.monthlyLimit)) })),
+    goals: objs(d.goals).map(g => ({ id: id(g.id), name: str(g.name, 'Objetivo'), target: Math.abs(num0(g.target)), saved: Math.abs(num0(g.saved)), deadline: dateOk(g.deadline), created: dateOk(g.created) || t, base: Math.abs(num0(g.base ?? g.saved)) })),
+    recurring: objs(d.recurring).map(r => { const next = dateOk(r.next) || t; return { id: id(r.id), name: str(r.name, 'Recorrente'), kind: pick(r.kind, ENTRY, 'expense'), amount: Math.abs(num0(r.amount)), accountId: sid(r.accountId), destId: sid(r.destId), category: cat(r.category), goalId: sid(r.goalId), freq: pick(r.freq, FREQ, 'monthly'), next, day: Math.min(Math.max(Math.round(num0(r.day)) || +next.slice(8, 10), 1), 31), active: r.active !== false }; }),
+    invest: objs(d.invest).map(i => ({ id: id(i.id), name: str(i.name, 'Investimento'), type: pick(i.type, INV, 'outro'), invested: Math.abs(num0(i.invested)), current: Math.abs(num0(i.current)) })),
   };
 }
 
 // ---------- Utilitários ----------
 const uid = () => (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(16).slice(2));
-const VERSION = 'v19';
+const VERSION = 'v20';
 const fmtEur = new Intl.NumberFormat('pt-PT', { style: 'currency', currency: 'EUR' });
 // Modo privado: valores escondidos; só aparecem enquanto manténs o dedo premido no olho.
 // Assim, ao sair da app (e o iOS tirar a imagem do seletor de apps) nunca há valores à vista.
@@ -307,7 +315,7 @@ function home() {
   const last = byDate(db.entries).slice(0, 5);
 
   return `<div class="hero"><small>DISPONÍVEL PARA GASTAR</small><b>${eur(spendable())}</b><div>Património líquido: <strong>${eur(netWorth())}</strong></div></div>
-  ${db.accounts.length ? `<div class="card qa"><div class="qarow"><input id="qa" placeholder="Registo rápido: 12,50 café" enterkeyhint="done" autocomplete="off"><button class="btn main" data-act="qa">Registar</button></div><div class="sub" style="margin-top:6px">Ex.: «gastei 30 no supermercado», «recebi 1500 salário», «transferi 100 para Poupança». Confirmas antes de guardar.</div></div>` : ''}
+  ${db.accounts.length ? `<div class="card qa"><div class="qarow"><input id="qa" aria-label="Registo rápido" placeholder="Registo rápido: 12,50 café" enterkeyhint="done" autocomplete="off"><button class="btn main" data-act="qa">Registar</button></div><div class="sub" style="margin-top:6px">Ex.: «gastei 30 no supermercado», «recebi 1500 salário», «transferi 100 para Poupança». Confirmas antes de guardar.</div></div>` : ''}
   ${db.accounts.length ? `<div class="row2"><button class="btn main" data-quick="expense">- Adicionar despesa</button><button class="btn main alt" data-quick="income">+ Adicionar receita</button></div>` : ''}
   <div class="row2" style="margin-top:12px">
     <div class="card metric"><span class="pos">↙</span><small>Receitas de ${monthName(ym)}</small><b>${eur(inc)}</b>${delta(inc, pInc, true)}</div>
@@ -348,10 +356,10 @@ function entriesList() {
 function entries() {
   if (!db.accounts.length) return emptyBox('⇄', 'Adiciona primeiro uma conta no separador Contas.');
   const months = [...new Set([curMonth(), ...db.entries.map(e => e.date.slice(0, 7))])].sort().reverse(), f = ui.f;
-  return `<input id="q" type="search" placeholder="🔍 Pesquisar por descrição, valor ou categoria" value="${esc(f.q)}">
-  <div class="filters"><select data-f="month"><option value="">Todos os meses</option>${months.map(m => `<option value="${m}" ${f.month === m ? 'selected' : ''}>${monthName(m, true)}</option>`).join('')}</select>
-  <select data-f="cat"><option value="">Todas as categorias</option>${opts(CATS, f.cat)}</select>
-  <select data-f="acc"><option value="">Todas as contas</option>${accOpts(f.acc)}</select></div>
+  return `<input id="q" type="search" aria-label="Pesquisar movimentos" placeholder="🔍 Pesquisar por descrição, valor ou categoria" value="${esc(f.q)}">
+  <div class="filters"><select data-f="month" aria-label="Filtrar por mês"><option value="">Todos os meses</option>${months.map(m => `<option value="${m}" ${f.month === m ? 'selected' : ''}>${monthName(m, true)}</option>`).join('')}</select>
+  <select data-f="cat" aria-label="Filtrar por categoria"><option value="">Todas as categorias</option>${opts(CATS, f.cat)}</select>
+  <select data-f="acc" aria-label="Filtrar por conta"><option value="">Todas as contas</option>${accOpts(f.acc)}</select></div>
   <div id="elist">${entriesList()}</div>`;
 }
 
@@ -499,6 +507,9 @@ function quickAdd() {
 // ---------- Formulários (folha inferior) ----------
 function openSheet(html) {
   $('sheet').innerHTML = html; $('sheet-bg').hidden = false;
+  // nome do diálogo e etiquetas ligadas aos campos (leitores de ecrã)
+  const h = $('sheet').querySelector('h2'); if (h) { h.id = 'sheet-title'; $('sheet').setAttribute('aria-labelledby', 'sheet-title'); }
+  $('sheet').querySelectorAll('label').forEach((l, i) => { const c = l.nextElementSibling; if (c && /^(INPUT|SELECT|TEXTAREA)$/.test(c.tagName)) { c.id = c.id || 'campo' + i; l.htmlFor = c.id; } });
   if (masked()) $('sheet').querySelectorAll('input[inputmode=decimal]').forEach(i => { if (i.value) { i.classList.add('sec'); i.addEventListener('focus', () => i.classList.remove('sec'), { once: true }); } });
 }
 function closeSheet() { $('sheet-bg').hidden = true; $('sheet').innerHTML = ''; }
@@ -516,7 +527,7 @@ let form = null;
 
 function accountForm(id) {
   const a = id ? acc(id) : null; form = { type: 'account', id };
-  openSheet(`<h3>${a ? 'Editar conta' : 'Nova conta'}</h3>
+  openSheet(`<h2>${a ? 'Editar conta' : 'Nova conta'}</h2>
   <label>Nome</label><input name="name" placeholder="ex.: Banco principal" value="${a ? esc(a.name) : ''}">
   <label>Tipo</label><select name="kind">${Object.entries(KINDS).map(([k, v]) => `<option value="${k}" ${a?.kind === k ? 'selected' : ''}>${v[1]} ${v[0]}</option>`).join('')}</select>
   <label>${a ? 'Saldo inicial' : 'Saldo atual'} em €</label><input name="amount" inputmode="decimal" value="${a ? num(a.opening) : ''}">
@@ -526,7 +537,7 @@ function accountForm(id) {
 function entryForm(id, preset, prefill) {
   const e = id ? db.entries.find(x => x.id === id) : prefill || null; form = { type: 'entry', id };
   const k = e?.kind || preset || 'expense';
-  openSheet(`<h3>${id ? 'Editar movimento' : 'Novo movimento'}</h3>${entryFields(e, k)}${buttons(id)}`);
+  openSheet(`<h2>${id ? 'Editar movimento' : 'Novo movimento'}</h2>${entryFields(e, k)}${buttons(id)}`);
   form.kind = k; syncKind();
 }
 function entryFields(e, k, withRec) {
@@ -547,12 +558,12 @@ function syncKind() {
 }
 function budgetForm(id) {
   const b = id ? db.budgets.find(x => x.id === id) : null; form = { type: 'budget', id };
-  openSheet(`<h3>${b ? 'Editar orçamento' : 'Novo orçamento'}</h3><label>Categoria</label><select name="category">${opts(CATS, b?.category || 'alimentacao')}</select>
+  openSheet(`<h2>${b ? 'Editar orçamento' : 'Novo orçamento'}</h2><label>Categoria</label><select name="category">${opts(CATS, b?.category || 'alimentacao')}</select>
   <label>Limite mensal em €</label><input name="amount" inputmode="decimal" value="${b ? num(b.limit) : ''}">${buttons(id)}`);
 }
 function goalForm(id) {
   const g = id ? db.goals.find(x => x.id === id) : null; form = { type: 'goal', id };
-  openSheet(`<h3>${g ? 'Editar objetivo' : 'Novo objetivo'}</h3><label>Objetivo</label><input name="name" placeholder="ex.: Viagem" value="${g ? esc(g.name) : ''}">
+  openSheet(`<h2>${g ? 'Editar objetivo' : 'Novo objetivo'}</h2><label>Objetivo</label><input name="name" placeholder="ex.: Viagem" value="${g ? esc(g.name) : ''}">
   <label>Valor pretendido em €</label><input name="target" inputmode="decimal" value="${g ? num(g.target) : ''}">
   <label>Já tenho poupado em €</label><input name="saved" inputmode="decimal" placeholder="0" value="${g ? num(g.saved) : ''}">
   <label>Prazo (opcional)</label><input name="deadline" type="date" value="${g?.deadline || ''}">${buttons(id)}`);
@@ -560,7 +571,7 @@ function goalForm(id) {
 function recForm(id) {
   const r = id ? db.recurring.find(x => x.id === id) : null; form = { type: 'rec', id };
   if (!db.accounts.length) return toast('Adiciona primeiro uma conta.');
-  openSheet(`<h3>${r ? 'Editar recorrente' : 'Nova recorrente'}</h3>${entryFields(r, r?.kind || 'expense', true)}
+  openSheet(`<h2>${r ? 'Editar recorrente' : 'Nova recorrente'}</h2>${entryFields(r, r?.kind || 'expense', true)}
   <label>Periodicidade</label><select name="freq">${Object.entries(FREQ).map(([k, v]) => `<option value="${k}" ${r?.freq === k ? 'selected' : ''}>${v}</option>`).join('')}</select>
   <label>Estado</label><select name="active"><option value="1">Ativa</option><option value="0" ${r && !r.active ? 'selected' : ''}>Pausada</option></select>
   <div class="sub" style="margin:8px 4px">O movimento é criado automaticamente em cada data (datas passadas são criadas já).</div>${buttons(id)}`);
@@ -568,7 +579,7 @@ function recForm(id) {
 }
 function invForm(id) {
   const i = id ? db.invest.find(x => x.id === id) : null; form = { type: 'inv', id };
-  openSheet(`<h3>${i ? 'Editar' : 'Novo investimento / dívida'}</h3><label>Nome</label><input name="name" placeholder="ex.: ETF Mundo" value="${i ? esc(i.name) : ''}">
+  openSheet(`<h2>${i ? 'Editar' : 'Novo investimento / dívida'}</h2><label>Nome</label><input name="name" placeholder="ex.: ETF Mundo" value="${i ? esc(i.name) : ''}">
   <label>Tipo</label><select name="type">${Object.entries(INV).map(([k, v]) => `<option value="${k}" ${i?.type === k ? 'selected' : ''}>${v}</option>`).join('')}</select>
   <label>Capital investido em € (ignora nas dívidas)</label><input name="invested" inputmode="decimal" placeholder="0" value="${i ? num(i.invested) : ''}">
   <label>Valor atual em € (ou valor em dívida)</label><input name="current" inputmode="decimal" value="${i ? num(i.current) : ''}">${buttons(id)}`);
@@ -680,7 +691,7 @@ function saveText(name, text) {
   const a = document.createElement('a'); a.href = URL.createObjectURL(f); a.download = name; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 5000);
 }
 function corruptNotice() {
-  openSheet(`<h3>⚠️ Dados danificados</h3>
+  openSheet(`<h2>⚠️ Dados danificados</h2>
   <p class="sub" style="font-size:15px">Os dados guardados neste telemóvel não puderam ser lidos. <b>Não foram apagados</b>: ficou uma cópia à parte. Exporta-a agora, para a poderes recuperar, e depois podes importar uma cópia de segurança em Contas.</p>
   <button class="btn main" data-act="export-corrupt" style="width:100%;margin-top:12px">Exportar os dados danificados</button>
   <button class="btn" data-act="welcome-close" style="width:100%;margin:10px 0 calc(env(safe-area-inset-bottom) + 20px)">Continuar com a app vazia</button>`);
@@ -757,9 +768,11 @@ document.addEventListener('keydown', ev => {
   if (/^\d$/.test(ev.key)) pinKey(ev.key); else if (ev.key === 'Backspace') pinKey('del');
 });
 let hiddenAt = 0;
+window.addEventListener('storage', e => { if (e.key === KEY) syncFromStorage(); });
+window.addEventListener('focus', syncFromStorage);
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) { hiddenAt = Date.now(); cover(true); if (privacyOn() && !$('sheet-bg').hidden) closeSheet(); return; }
-  cover(false);
+  cover(false); syncFromStorage();
   if (getPin() && $('lock').hidden && Date.now() - hiddenAt > 30000) { closeSheet(); showLock('unlock'); }
   applyRecurring(); if ($('sheet-bg').hidden) render(true);
 });
@@ -773,7 +786,7 @@ function welcome() {
   const install = standalone ? '' : /iPhone|iPad|iPod/.test(ua) ? 'Abre este link no <b>Safari</b>, toca em <b>Partilhar</b> e depois em <b>Adicionar ao ecrã principal</b>.'
     : /Android/.test(ua) ? 'No <b>Chrome</b>, toca nos três pontos (⋮) e depois em <b>Instalar aplicação</b>.' : 'Podes instalá-la no telemóvel pelo menu do browser (Adicionar ao ecrã principal).';
   try { localStorage.setItem(WELCOME_KEY, '1'); } catch (e) {}
-  openSheet(`<h3>Bem-vindo à Poupança 👋</h3>
+  openSheet(`<h2>Bem-vindo à Poupança 👋</h2>
   <div class="wl"><span>🏦</span><div><b>Começa por uma conta.</b> Em <i>Contas</i>, cria uma conta com o saldo atual.</div></div>
   <div class="wl"><span>⚡</span><div><b>Regista depressa.</b> Na página inicial, escreve «12,50 café» e confirma.</div></div>
   <div class="wl"><span>💾</span><div><b>Os dados ficam só neste telemóvel.</b> Não há servidor nem conta. Se apagares a app ou mudares de telemóvel sem exportar, perdes tudo. Exporta uma cópia todos os meses (Contas → Cópia de segurança).</div></div>

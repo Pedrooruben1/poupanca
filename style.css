@@ -138,3 +138,8 @@ input.sec{-webkit-text-security:disc;text-security:disc}
 .actionbar{position:sticky;bottom:0;background:var(--bg);padding:8px 0 calc(env(safe-area-inset-bottom) + 12px);margin-top:12px;border-top:1px solid var(--line)}
 .actionbar .btns{margin-top:0}
 .actionbar .formerr{margin-top:0;padding-bottom:4px}
+
+/* ---- v20 ---- */
+#sheet h2{margin:0 0 14px;text-align:center;font-size:19px}
+:root{--red:#c62828}
+@media(prefers-color-scheme:dark){:root{--red:#ff6b6b}}
