@@ -46,7 +46,7 @@ function normalize(d) {
 
 // ---------- Utilitários ----------
 const uid = () => (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(16).slice(2));
-const VERSION = 'v10';
+const VERSION = 'v11';
 const fmtEur = new Intl.NumberFormat('pt-PT', { style: 'currency', currency: 'EUR' });
 // Modo privado: valores escondidos; só aparecem enquanto manténs o dedo premido no olho.
 // Assim, ao sair da app (e o iOS tirar a imagem do seletor de apps) nunca há valores à vista.
@@ -127,8 +127,9 @@ const sign = r => (r.kind === 'income' ? 1 : r.kind === 'expense' ? -1 : 0) * r.
 
 // ---------- Objetivos ----------
 function goalInfo(g) {
-  const contrib = db.entries.filter(e => e.goalId === g.id).reduce((s, e) => s + e.amount, 0);
-  const saved = g.saved + contrib, remaining = Math.max(g.target - saved, 0), p = Math.min(saved / Math.max(g.target, .01), 1);
+  // Transferência associada soma ao objetivo; despesa associada retira (gasto a partir do que estava poupado).
+  const contrib = db.entries.filter(e => e.goalId === g.id).reduce((s, e) => s + (e.kind === 'expense' ? -e.amount : e.amount), 0);
+  const saved = Math.max(g.saved + contrib, 0), remaining = Math.max(g.target - saved, 0), p = Math.min(saved / Math.max(g.target, .01), 1);
   const info = { saved, remaining, p, contrib, need: null, status: '', tone: '' };
   if (remaining === 0) { info.status = 'Concluído ✅'; info.tone = 'pos'; return info; }
   if (g.deadline) {
@@ -253,6 +254,7 @@ function home() {
   const last = byDate(db.entries).slice(0, 5);
 
   return `<div class="hero"><small>DISPONÍVEL PARA GASTAR</small><b>${eur(spendable())}</b><div>Património líquido: <strong>${eur(netWorth())}</strong></div></div>
+  ${db.accounts.length ? `<div class="card qa"><div class="qarow"><input id="qa" placeholder="Registo rápido: 12,50 café" enterkeyhint="done" autocomplete="off"><button class="btn main" data-act="qa">Registar</button></div><div class="sub" style="margin-top:6px">Ex.: «gastei 30 no supermercado», «recebi 1500 salário», «transferi 100 para Poupança». Confirmas antes de guardar.</div></div>` : ''}
   ${db.accounts.length ? `<div class="row2"><button class="btn main" data-quick="expense">− Adicionar despesa</button><button class="btn main alt" data-quick="income">+ Adicionar receita</button></div>` : ''}
   <div class="row2" style="margin-top:12px">
     <div class="card metric"><span class="pos">↙</span><small>Receitas de ${monthName(ym)}</small><b>${eur(inc)}</b>${delta(inc, pInc, true)}</div>
@@ -326,9 +328,9 @@ function goals() {
     <div><span>Prazo</span><b>${g.deadline ? fmtDate(g.deadline) : '—'}</b></div></div>
     ${i.need !== null && i.remaining > 0 ? `<div class="sub">Poupança mensal necessária: <strong>${eur(i.need)}</strong></div>` : ''}
     ${i.status ? `<div class="${i.tone}" style="font-weight:600;margin-top:4px">${i.status}</div>` : ''}
-    ${i.contrib ? `<div class="sub">Inclui ${eur(i.contrib)} de movimentos associados.</div>` : ''}
+    ${i.contrib ? `<div class="sub">Movimentos associados: ${i.contrib < 0 ? '−' : '+'}${eur(Math.abs(i.contrib))}</div>` : ''}
     <div class="step"><button data-goal-step="${g.id}" data-d="-10">−</button><span>Ajuste manual (±10 €)</span><button data-goal-step="${g.id}" data-d="10">+</button></div></div>`;
-  }).join('') + '<p class="note">Associa um movimento (transferência ou despesa) a um objetivo e o progresso atualiza sozinho.</p>';
+  }).join('') + '<p class="note">Uma transferência associada soma ao objetivo; uma despesa associada retira. O progresso atualiza sozinho.</p>';
 }
 
 // --- Contas / Recorrentes / Investimentos ---
@@ -346,6 +348,7 @@ function accounts() {
   <h2>Segurança</h2><div class="card"><div class="between" style="margin-bottom:10px"><div><b>Modo privado</b><div class="sub">Esconde os valores (••••). Mantém o dedo premido no 👁️ para os ver; ao largares, escondem-se logo.</div></div><button class="btn ${privacyOn() ? 'main' : ''}" data-act="privacy" style="flex:none;padding:8px 14px">${privacyOn() ? 'Ligado' : 'Desligado'}</button></div>
   <div style="border-top:1px solid var(--line);padding-top:10px"></div><p class="sub" style="margin-top:0">${getPin() ? '🔒 PIN ativo. A app bloqueia ao abrir e depois de 30 segundos fora dela.' : 'Protege a app com um PIN de 6 dígitos. É um bloqueio de ecrã: impede que outra pessoa abra a app no teu telemóvel.'}</p>
   <div class="btns" style="margin-top:8px">${getPin() ? '<button class="btn" data-act="pin-change">Alterar PIN</button><button class="btn del" data-act="pin-remove">Remover PIN</button>' : '<button class="btn main" data-act="pin-set">Definir PIN</button>'}</div></div>
+  <h2>Ajuda</h2><div class="card"><button class="btn" data-act="welcome" style="width:100%">Ver as boas-vindas e as dicas</button></div>
   <p class="note" style="text-align:center">Poupança ${VERSION}</p>`;
 }
 function recurringView() {
@@ -365,6 +368,70 @@ function investView() {
   return `<div class="card kv"><div><span>Disponível</span><b>${eur(spendable())}</b></div><div><span>Investido</span><b>${eur(investedAccounts() + assets())}</b></div><div><span>Dívidas</span><b>${eur(debts())}</b></div><div class="tot"><span>Património líquido</span><b>${eur(netWorth())}</b></div></div>
   <h2>Investimentos e dívidas</h2>${list}<button class="btn main" data-act="new" style="margin-top:8px">+ Novo investimento / dívida</button>
   <p class="note">O valor atual é introduzido por ti. O dinheiro investido fica separado do disponível para gastar.</p>`;
+}
+
+
+// ---------- Registo rápido por texto (interpretado no telemóvel, nada sai daqui) ----------
+const norm = t => t.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+const QKEYS = {
+  restaurantes: ['cafe', 'restaurante', 'jantar', 'almoco', 'pizza', 'hamburguer', 'pastelaria', 'snack', 'sushi', 'bifana', 'pequeno almoco', 'lanche', 'gelado', 'cerveja', 'tasca', 'mcdonalds'],
+  alimentacao: ['supermercado', 'mercearia', 'talho', 'peixaria', 'mercado', 'lidl', 'continente', 'aldi', 'minipreco', 'pingo doce', 'intermarche', 'padaria', 'fruta', 'compras do mes'],
+  transportes: ['gasolina', 'gasoleo', 'combustivel', 'uber', 'bolt', 'comboio', 'metro', 'autocarro', 'passe', 'portagem', 'portagens', 'via verde', 'estacionamento', 'taxi', 'cp', 'carregamento'],
+  habitacao: ['renda', 'condominio', 'luz', 'agua', 'gas', 'internet', 'eletricidade', 'casa', 'ikea', 'obras', 'seguro casa'],
+  desporto: ['ginasio', 'futebol', 'padel', 'treino', 'desporto', 'piscina', 'corrida', 'inscricao', 'bicicleta', 'strava'],
+  subscricoes: ['netflix', 'spotify', 'subscricao', 'disney', 'hbo', 'youtube', 'icloud', 'prime', 'chatgpt', 'claude', 'telemovel', 'mensalidade'],
+  viagens: ['viagem', 'hotel', 'voo', 'aviao', 'booking', 'airbnb', 'ferias', 'hostel', 'ryanair'],
+  lazer: ['cinema', 'bar', 'discoteca', 'jogo', 'jogos', 'concerto', 'lazer', 'festa', 'bilhete', 'livro', 'steam', 'playstation'],
+  saude: ['farmacia', 'medico', 'dentista', 'consulta', 'saude', 'oculista', 'analises', 'medicamentos'],
+  compras: ['zara', 'roupa', 'sapatos', 'amazon', 'aliexpress', 'compras', 'presente', 'prenda', 'worten', 'fnac'],
+  investimentos: ['etf', 'acoes', 'cripto', 'bitcoin', 'investimento'],
+};
+const INCOME_WORDS = ['recebi', 'receita', 'salario', 'ordenado', 'ganhei', 'entrada', 'reembolso', 'devolucao', 'mesada', 'premio', 'subsidio', 'rendimento', 'vendi', 'venda', 'bonus', 'ferias pagas'];
+const TRANSFER_WORDS = ['transferi', 'transferencia', 'passei', 'mandei', 'depositei', 'levantei'];
+const FILLER = new Set(['gastei', 'gasto', 'gastos', 'paguei', 'pago', 'comprei', 'recebi', 'ganhei', 'transferi', 'passei', 'mandei', 'depositei', 'levantei', 'de', 'do', 'da', 'dos', 'das', 'no', 'na', 'nos', 'nas', 'em', 'num', 'numa', 'um', 'uma', 'para', 'com', 'a', 'o', 'as', 'os', 'por', 'euro', 'euros', 'eur', '+', '-', 'ontem', 'anteontem', 'hoje']);
+const hasWord = (n, k) => new RegExp('(^|[^a-z0-9])' + k + '([^a-z0-9]|$)').test(n);
+
+function parseQuick(raw) {
+  const text = raw.trim(), n = norm(text);
+  const m = text.match(/(\d{1,3}(?:\.\d{3})+(?:,\d{1,2})?|\d+(?:[.,]\d{1,2})?)/);
+  if (!m) return null;
+  const amount = Number(m[1].replace(/\.(?=\d{3}(,|$))/g, '').replace(',', '.'));
+  if (!Number.isFinite(amount) || amount <= 0) return null;
+  let kind = 'expense';
+  if (TRANSFER_WORDS.some(w => hasWord(n, w))) kind = 'transfer';
+  else if (/^\s*\+/.test(text) || INCOME_WORDS.some(w => hasWord(n, w))) kind = 'income';
+  let category = 'outros';
+  if (kind === 'expense') for (const [c, ks] of Object.entries(QKEYS)) if (ks.some(k => hasWord(n, k))) { category = c; break; }
+  // contas mencionadas, pela ordem em que aparecem no texto
+  const mentioned = db.accounts.map(a => ({ a, i: n.indexOf(norm(a.name)) })).filter(x => x.i >= 0 && norm(x.a.name).length > 1).sort((x, y) => x.i - y.i).map(x => x.a);
+  const lastId = (() => { try { return localStorage.getItem('poupanca-lastacc'); } catch (e) { return null; } })();
+  const dflt = acc(lastId) || db.accounts.find(a => a.kind !== 'investimento') || db.accounts[0];
+  let accountId = dflt.id, destId = null;
+  if (kind === 'transfer') {
+    if (mentioned.length >= 2) { accountId = mentioned[0].id; destId = mentioned[1].id; }
+    else if (mentioned.length === 1) { destId = mentioned[0].id; if (accountId === destId) accountId = (db.accounts.find(a => a.id !== destId) || dflt).id; }
+  } else if (mentioned.length) accountId = mentioned[0].id;
+  let date = today();
+  if (hasWord(n, 'anteontem')) date = plusDays(-2); else if (hasWord(n, 'ontem')) date = plusDays(-1);
+  let toks = text.replace(m[1], ' ').replace(/€/g, ' ').split(/\s+/).filter(Boolean);
+  while (toks.length && FILLER.has(norm(toks[0]))) toks.shift();
+  while (toks.length && FILLER.has(norm(toks[toks.length - 1]))) toks.pop();
+  toks = toks.filter(t => !['ontem', 'anteontem', 'hoje'].includes(norm(t)));
+  // o nome das contas escolhidas não faz parte da descrição
+  const accWords = new Set(mentioned.flatMap(a => norm(a.name).split(/\s+/)));
+  toks = toks.filter(t => !accWords.has(norm(t)));
+  while (toks.length && FILLER.has(norm(toks[0]))) toks.shift();
+  while (toks.length && FILLER.has(norm(toks[toks.length - 1]))) toks.pop();
+  let note = toks.join(' ');
+  note = note ? note[0].toUpperCase() + note.slice(1) : '';
+  return { kind, amount, accountId, destId, category, note, date };
+}
+function quickAdd() {
+  const input = $('qa'); if (!input) return;
+  if (!db.accounts.length) return toast('Adiciona primeiro uma conta.');
+  const r = parseQuick(input.value);
+  if (!r) return toast('Não percebi o valor. Exemplo: 12,50 café');
+  input.value = ''; entryForm(null, r.kind, r);
 }
 
 // ---------- Formulários (folha inferior) ----------
@@ -391,10 +458,10 @@ function accountForm(id) {
   ${a ? `<div class="sub" style="margin:10px 4px">Saldo atual: <strong>${eur(balance(a))}</strong></div><button class="btn" data-act="history" style="width:100%">Ver movimentos desta conta</button>` : ''}
   ${buttons(id)}`);
 }
-function entryForm(id, preset) {
-  const e = id ? db.entries.find(x => x.id === id) : null; form = { type: 'entry', id };
+function entryForm(id, preset, prefill) {
+  const e = id ? db.entries.find(x => x.id === id) : prefill || null; form = { type: 'entry', id };
   const k = e?.kind || preset || 'expense';
-  openSheet(`<h3>${e ? 'Editar movimento' : 'Novo movimento'}</h3>${entryFields(e, k)}${buttons(id)}`);
+  openSheet(`<h3>${id ? 'Editar movimento' : 'Novo movimento'}</h3>${entryFields(e, k)}${buttons(id)}`);
   form.kind = k; syncKind();
 }
 function entryFields(e, k, withRec) {
@@ -404,12 +471,13 @@ function entryFields(e, k, withRec) {
   <label>Conta</label><select name="account">${accOpts(e?.accountId || db.accounts[0]?.id)}</select>
   <div id="dest"><label>Conta de destino</label><select name="dest">${accOpts(e?.destId, true)}</select></div>
   <div id="cat"><label>Categoria</label><select name="category">${opts(CATS, e?.category || 'outros')}</select></div>
-  <div id="goal"><label>Associar a um objetivo (opcional)</label><select name="goal">${goalOpts(e?.goalId)}</select></div>
+  <div id="goal"><label id="goallabel">Associar a um objetivo (opcional)</label><select name="goal">${goalOpts(e?.goalId)}</select></div>
   ${withRec ? '' : `<label>Descrição / notas (opcional)</label><input name="note" value="${e ? esc(e.note || '') : ''}">`}
   <label>${withRec ? 'Primeira data' : 'Data'}</label><input name="date" type="date" value="${e?.date || e?.next || today()}">`;
 }
 function syncKind() {
   $('dest').hidden = form.kind !== 'transfer'; $('cat').hidden = form.kind !== 'expense'; $('goal').hidden = form.kind === 'income';
+  $('goallabel').textContent = form.kind === 'expense' ? 'Retirar de um objetivo (opcional): a despesa desconta ao objetivo' : 'Associar a um objetivo (opcional): a transferência soma ao objetivo';
   document.querySelectorAll('#kseg button').forEach(b => b.classList.toggle('on', b.dataset.kind === form.kind));
 }
 function budgetForm(id) {
@@ -461,7 +529,7 @@ function saveForm() {
     } else {
       const old = id ? db.entries.find(x => x.id === id) : null;
       const e = { id: id || uid(), date: val('date') || today(), note: val('note').trim(), recId: old?.recId || null, ...base };
-      if (id) db.entries[db.entries.findIndex(x => x.id === id)] = e; else db.entries.push(e);
+      if (id) db.entries[db.entries.findIndex(x => x.id === id)] = e; else { db.entries.push(e); try { localStorage.setItem('poupanca-lastacc', e.accountId); } catch (x) {} }
     }
   } else if (type === 'budget') {
     const limit = parseMoney(val('amount')), category = val('category');
@@ -546,6 +614,9 @@ document.addEventListener('click', ev => {
   else if (d.act === 'pin-set') showLock('set1', () => render(true));
   else if (d.act === 'pin-change') showLock('verify', () => showLock('set1', () => render(true)));
   else if (d.act === 'pin-remove') showLock('verify', () => { localStorage.removeItem(PINKEY); render(true); });
+  else if (d.act === 'qa') quickAdd();
+  else if (d.act === 'welcome') welcome();
+  else if (d.act === 'welcome-close') closeSheet();
   else if (d.act === 'pin-cancel') hideLock();
   else if (d.act === 'privacy') { try { localStorage.setItem(PRIVKEY, privacyOn() ? '0' : '1'); } catch (e) {} reveal = false; render(true); }
   else if (d.act === 'pin-forgot') { if (confirm('Esqueceste o PIN? Para entrar tens de apagar TODOS os dados deste telemóvel (só recuperas com uma cópia de segurança). Apagar?')) { [KEY, 'poupanca-v1', PINKEY, LOCKKEY].forEach(k => localStorage.removeItem(k)); location.reload(); } }
@@ -557,6 +628,7 @@ document.addEventListener('change', ev => {
   if (t.id === 'file' && t.files[0]) importData(t.files[0]);
   else if (t.dataset.f) { ui.f[t.dataset.f] = t.value; render(true); }
 });
+document.addEventListener('keydown', ev => { if (ev.key === 'Enter' && ev.target.id === 'qa') { ev.preventDefault(); quickAdd(); } });
 document.addEventListener('input', ev => { if (ev.target.id === 'q') { ui.f.q = ev.target.value; $('elist').innerHTML = entriesList(); } });
 // Cortina de privacidade: tapa o ecrã quando a app perde o foco, para o seletor de apps não mostrar saldos.
 const cover = on => { $('cover').classList.toggle('on', on); if (on && reveal) setReveal(false); };
@@ -576,6 +648,26 @@ document.addEventListener('visibilitychange', () => {
   if (getPin() && $('lock').hidden && Date.now() - hiddenAt > 30000) { closeSheet(); showLock('unlock'); }
   applyRecurring(); if ($('sheet-bg').hidden) render(true);
 });
+
+
+// ---------- Boas-vindas ----------
+const WELCOME_KEY = 'poupanca-welcome';
+function welcome() {
+  const standalone = (window.matchMedia && matchMedia('(display-mode: standalone)').matches) || navigator.standalone;
+  const ua = navigator.userAgent;
+  const install = standalone ? '' : /iPhone|iPad|iPod/.test(ua) ? 'Abre este link no <b>Safari</b>, toca em <b>Partilhar</b> e depois em <b>Adicionar ao ecrã principal</b>.'
+    : /Android/.test(ua) ? 'No <b>Chrome</b>, toca nos três pontos (⋮) e depois em <b>Instalar aplicação</b>.' : 'Podes instalá-la no telemóvel pelo menu do browser (Adicionar ao ecrã principal).';
+  try { localStorage.setItem(WELCOME_KEY, '1'); } catch (e) {}
+  openSheet(`<h3>Bem-vindo à Poupança 👋</h3>
+  <div class="wl"><span>🏦</span><div><b>Começa por uma conta.</b> Em <i>Contas</i>, cria uma conta com o saldo atual.</div></div>
+  <div class="wl"><span>⚡</span><div><b>Regista depressa.</b> Na página inicial, escreve «12,50 café» e confirma.</div></div>
+  <div class="wl"><span>💾</span><div><b>Os dados ficam só neste telemóvel.</b> Não há servidor nem conta. Se apagares a app ou mudares de telemóvel sem exportar, perdes tudo. Exporta uma cópia todos os meses (Contas → Cópia de segurança).</div></div>
+  <div class="wl"><span>👁️</span><div><b>Modo privado.</b> Os valores estão escondidos (••••). Mantém o dedo premido no olho para os ver.</div></div>
+  ${install ? `<div class="wl"><span>📲</span><div><b>Instalar.</b> ${install}</div></div>` : ''}
+  <div class="wl"><span>⚠️</span><div><b>Uma app pessoal.</b> Não é aconselhamento financeiro nem tem segurança profissional. O PIN só bloqueia o ecrã. Não guardes aqui palavras-passe nem números de cartões.</div></div>
+  <button class="btn main" data-act="welcome-close" style="width:100%;margin-top:16px">Começar</button>`);
+}
+const needsWelcome = () => { try { return !localStorage.getItem(WELCOME_KEY) && !db.accounts.length && !db.entries.length; } catch (e) { return false; } };
 
 // ---------- PIN ----------
 const PINKEY = 'poupanca-pin', LOCKKEY = 'poupanca-lockuntil', PINLEN = 6;
@@ -626,4 +718,5 @@ db = load();
 if (getPin()) showLock('unlock');
 applyRecurring();
 render();
+if (needsWelcome() && $('lock').hidden) welcome();
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
