@@ -56,7 +56,7 @@ function normalize(d) {
 
 // ---------- Utilitários ----------
 const uid = () => (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(16).slice(2));
-const VERSION = 'v15';
+const VERSION = 'v16';
 const fmtEur = new Intl.NumberFormat('pt-PT', { style: 'currency', currency: 'EUR' });
 // Modo privado: valores escondidos; só aparecem enquanto manténs o dedo premido no olho.
 // Assim, ao sair da app (e o iOS tirar a imagem do seletor de apps) nunca há valores à vista.
@@ -106,10 +106,13 @@ const debts = () => db.invest.filter(i => i.type === 'divida').reduce((s, i) => 
 const netWorth = () => spendable() + savingsTotal() + investedAccounts() + assets() - debts();
 
 const curMonth = () => today().slice(0, 7);
-const sumEntries = (kind, ym, cat, upToDay) => db.entries
-  .filter(e => e.kind === kind && e.date.startsWith(ym) && (!cat || e.category === cat) && (!upToDay || +e.date.slice(8, 10) <= upToDay))
+// só conta movimentos até hoje (os agendados entram na previsão, não no que já aconteceu)
+const sumEntries = (kind, ym, cat, upToDay, t = today()) => db.entries
+  .filter(e => e.kind === kind && e.date <= t && e.date.startsWith(ym) && (!cat || e.category === cat) && (!upToDay || +e.date.slice(8, 10) <= upToDay))
   .reduce((s, e) => s + e.amount, 0);
-const byDate = list => [...list].sort((a, b) => b.date.localeCompare(a.date) || 0);
+// mais recente primeiro; no mesmo dia, o último registado aparece em cima
+const pctOf = p => (p < 1 ? Math.min(99, Math.round(p * 100)) : Math.round(p * 100));
+const byDate = list => list.map((e, i) => [e, i]).sort((a, b) => b[0].date.localeCompare(a[0].date) || b[1] - a[1]).map(x => x[0]);
 
 // ---------- Recorrentes ----------
 function advance(rec) {
@@ -120,11 +123,13 @@ function advance(rec) {
 }
 function applyRecurring() {
   let changed = false;
+  // datas já lançadas por cada regra: ao editar a data de uma regra para trás não se duplicam movimentos
+  const done = new Set(db.entries.filter(e => e.recId).map(e => e.recId + '|' + e.date));
   for (const r of db.recurring) {
     if (!r.active || !acc(r.accountId)) continue;
     let guard = 0;
     while (r.next <= today() && guard++ < 400) {
-      db.entries.push({ id: uid(), date: r.next, kind: r.kind, amount: r.amount, accountId: r.accountId, destId: r.destId || null, category: r.category || 'outros', note: r.name, goalId: r.goalId || null, recId: r.id });
+      if (!done.has(r.id + '|' + r.next)) db.entries.push({ id: uid(), date: r.next, kind: r.kind, amount: r.amount, accountId: r.accountId, destId: r.destId || null, category: r.category || 'outros', note: r.name, goalId: r.goalId || null, recId: r.id });
       r.next = advance(r); changed = true;
     }
   }
@@ -147,7 +152,7 @@ const sign = r => (r.kind === 'income' ? 1 : r.kind === 'expense' ? -1 : 0) * r.
 // ---------- Objetivos ----------
 function goalInfo(g) {
   // Transferência associada soma ao objetivo; despesa associada retira (gasto a partir do que estava poupado).
-  const contrib = db.entries.filter(e => e.goalId === g.id).reduce((s, e) => s + (e.kind === 'expense' ? -e.amount : e.amount), 0);
+  const contrib = db.entries.filter(e => e.goalId === g.id && e.date <= today()).reduce((s, e) => s + (e.kind === 'expense' ? -e.amount : e.amount), 0);
   const saved = Math.max(g.saved + contrib, 0), remaining = Math.max(g.target - saved, 0), p = Math.min(saved / Math.max(g.target, .01), 1);
   const info = { saved, remaining, p, contrib, need: null, status: '', tone: '' };
   if (remaining === 0) { info.status = 'Concluído ✅'; info.tone = 'pos'; return info; }
@@ -182,7 +187,7 @@ function alerts() {
   for (const b of db.budgets) {
     const s = sumEntries('expense', ym, b.category), p = s / Math.max(b.limit, .01);
     if (p >= 1) out.push(['neg', `Excedeste o orçamento de ${CATS[b.category][0]}: ${eur(s)} de ${eur(b.limit)}.`]);
-    else if (p >= .8) out.push(['warn', `Já gastaste ${Math.round(p * 100)}% do teu orçamento de ${CATS[b.category][0]}.`]);
+    else if (p >= .8) out.push(['warn', `Já gastaste ${pctOf(p)}% do teu orçamento de ${CATS[b.category][0]}.`]);
   }
   for (const u of upcoming(plusDays(3)).filter(u => u.rec.kind === 'expense')) {
     const n = Math.round((parseD(u.date) - parseD(today())) / 864e5);
@@ -286,7 +291,7 @@ function home() {
   <div class="card"><div class="between"><b>Taxa de poupança</b><b class="${rate !== null && rate < 0 ? 'neg' : 'pos'}">${rate === null ? '-' : pct(rate)}</b></div>${rate === null ? '' : bar(rate / 100, rate < 0 ? 'over' : '')}
     <div class="sub">${rate === null ? 'Regista uma receita este mês para calcular.' : `Este mês poupaste ${eur(inc - exp)} de ${eur(inc)} recebidos.`}</div></div>
   <div class="card"><div class="between"><b>Previsão do saldo no fim do mês</b><b>${eur(fc)}</b></div>
-    <div class="sub">Saldo atual + recorrentes e movimentos agendados até ${fmtDate(monthEnd())}${up.length ? ` (${up.length} movimento${up.length > 1 ? 's' : ''})` : ''}.</div>
+    <div class="sub">Saldo atual + recorrentes e movimentos agendados até ${fmtDate(monthEnd())}${up.length + sched.length ? ` (${up.length + sched.length} movimento${up.length + sched.length > 1 ? 's' : ''})` : ''}.</div>
     ${db.budgets.length ? `<div class="sub" style="margin-top:6px">Ainda tens <strong>${eur(budgetLeft)}</strong> por gastar nos orçamentos deste mês.</div>` : ''}</div>
   ${al.length ? `<h2>Alertas</h2>${al.map(([t, m]) => `<div class="alert ${t}">${m}</div>`).join('')}` : ''}
   <h2>Património</h2>
@@ -337,7 +342,7 @@ function budgets() {
     const s = sumEntries('expense', ym, b.category), p = s / Math.max(b.limit, .01), ps = sumEntries('expense', prev, b.category);
     const st = p >= 1 ? ['Excedido', 'neg'] : p >= .8 ? ['Atenção', 'warnt'] : ['Dentro do limite', 'pos'];
     return `<button class="item" data-edit-budget="${b.id}" style="display:block"><div class="between"><span>${CATS[b.category][1]} ${CATS[b.category][0]}</span><span class="sub">${eur(s)} / ${eur(b.limit)}</span></div>${bar(p, p >= 1 ? 'over' : p >= .8 ? 'warn' : '')}
-    <div class="between sub"><span class="${st[1]}">${Math.round(p * 100)}% · ${st[0]}</span><span>${ps ? 'Mês anterior: ' + eur(ps) : ''}</span></div></button>`;
+    <div class="between sub"><span class="${st[1]}">${pctOf(p)}% · ${st[0]}</span><span>${ps ? 'Mês anterior: ' + eur(ps) : ''}</span></div></button>`;
   }).join('')}</div><p class="note">Toca num orçamento para o editar.</p>`;
 }
 
