@@ -42,7 +42,9 @@ function save() { try { localStorage.setItem(KEY, JSON.stringify(db)); } catch (
 if (navigator.storage && navigator.storage.persist) navigator.storage.persist();
 
 // Aceita dados da versão anterior e o financas.json da app Swift (datas em segundos desde 2001, nomes em português).
+let normFixes = 0; // datas inválidas corrigidas na última normalização
 function normalize(d) {
+  normFixes = 0;
   // tipos de conta: aceita as chaves, os nomes em português e variantes (maiúsculas, acentos); o resto vira conta à ordem
   const kindWords = { ordem: 'ordem', 'conta a ordem': 'ordem', banco: 'ordem', poupanca: 'poupanca', carteira: 'carteira', dinheiro: 'carteira', 'dinheiro fisico': 'carteira', investimento: 'investimento', investimentos: 'investimento' };
   const kindMap = new Proxy({}, { get: (_, k) => kindWords[norm(String(k)).trim()] });
@@ -53,7 +55,15 @@ function normalize(d) {
   // ids só com letras, números, _ e - (impede código injetado através de um ficheiro alterado)
   const sid = v => String(v ?? '').replace(/[^A-Za-z0-9_-]/g, '').slice(0, 64) || null;
   const id = v => sid(v) || uid();
-  const dateOk = x => (/^\d{4}-\d{2}-\d{2}$/.test(String(x)) ? String(x) : '');
+  // só datas reais do calendário: dia a mais no mês (30/02) passa ao último dia do mês; o resto é inválido
+  const dateOk = x => {
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(x));
+    const y = m ? +m[1] : 0, mo = m ? +m[2] : 0, dd = m ? +m[3] : 0;
+    if (!m || y < 1900 || y > 2200 || mo < 1 || mo > 12 || dd < 1) { if (x) normFixes++; return ''; }
+    const last = new Date(Date.UTC(y, mo, 0)).getUTCDate();
+    if (dd > last) { normFixes++; return `${m[1]}-${m[2]}-${String(last).padStart(2, '0')}`; }
+    return String(x);
+  };
   // datas da app Swift (segundos desde 2001): converte para o dia no fuso do telemóvel
   const date = x => (typeof x === 'number' ? ymd(new Date((x + 978307200) * 1000)) : dateOk(String(x).slice(0, 10)) || today());
   const str = (v, d) => String(v ?? '').slice(0, 200) || d;
@@ -71,7 +81,7 @@ function normalize(d) {
 
 // ---------- Utilitários ----------
 const uid = () => (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(16).slice(2));
-const VERSION = 'v18';
+const VERSION = 'v19';
 const fmtEur = new Intl.NumberFormat('pt-PT', { style: 'currency', currency: 'EUR' });
 // Modo privado: valores escondidos; só aparecem enquanto manténs o dedo premido no olho.
 // Assim, ao sair da app (e o iOS tirar a imagem do seletor de apps) nunca há valores à vista.
@@ -576,6 +586,7 @@ function saveForm() {
     if (!amount) return showErr('Indica um valor maior que zero.');
     if (isRec && !val('name').trim()) return showErr('Indica um nome.');
     if (kind === 'transfer' && (!val('dest') || val('dest') === val('account'))) return showErr('Escolhe uma conta de destino diferente da conta de origem.');
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(val('date'))) return showErr('Indica uma data válida.');
     const base = { kind, amount, accountId: val('account'), destId: kind === 'transfer' ? val('dest') : null, category: kind === 'expense' ? val('category') : 'outros', goalId: kind !== 'income' && val('goal') ? val('goal') : null };
     if (isRec) {
       const next = val('date') || today(), r = { id: id || uid(), name: val('name').trim(), ...base, freq: val('freq'), next, day: +next.slice(8, 10), active: val('active') === '1' };
@@ -647,12 +658,13 @@ function importData(file) {
     if (!parsed.accounts.length && (parsed.entries || []).length) return toast('O ficheiro tem movimentos mas nenhuma conta. Não foi importado.');
     let d;
     try { d = normalize(parsed); } catch (e) { return toast('Ficheiro inválido ou com dados que a app não percebe.'); }
-    if (!confirm(`Importar ${d.accounts.length} conta(s), ${d.entries.length} movimento(s), ${d.budgets.length} orçamento(s) e ${d.goals.length} objetivo(s)? Isto substitui os dados atuais (podes desfazer a seguir em Contas).`)) return;
+    const fixes = normFixes;
+    if (!confirm(`Importar ${d.accounts.length} conta(s), ${d.entries.length} movimento(s), ${d.budgets.length} orçamento(s) e ${d.goals.length} objetivo(s)? Isto substitui os dados atuais (podes desfazer a seguir em Contas).${fixes ? `\n\nAtenção: ${fixes} data(s) impossíveis (ex.: 30/02) serão corrigidas: o dia passa ao último dia do mês, ou a hoje se o resto da data não fizer sentido.` : ''}`)) return;
     const prevDb = db;
     if (prevDb.accounts.length || prevDb.entries.length || prevDb.goals.length) { try { localStorage.setItem(UNDOKEY, JSON.stringify(prevDb)); } catch (e) {} }
     db = d;
     try { render(true); save(); applyRecurring(); render(true); } catch (err) { db = prevDb; render(true); return toast('Ficheiro inválido ou com dados que a app não percebe.'); }
-    toast('Cópia importada.');
+    toast(fixes ? `Cópia importada. ${fixes} data(s) impossíveis foram corrigidas.` : 'Cópia importada.');
   };
   r.readAsText(file);
 }
