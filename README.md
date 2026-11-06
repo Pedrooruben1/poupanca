@@ -1,11 +1,17 @@
 # Poupança (PWA)
 
-Versão web da app Poupança. Dados guardados só no telemóvel.
+App pessoal de finanças. Os dados ficam só no telemóvel, sem servidor nem conta.
+
+Versão **v21**: acrescenta a **Análise financeira** (Fase 1) em Movimentos → Análise. A descrição completa está em `docs/ALTERACOES.md`.
 
 ## Publicar no GitHub Pages
-1. Cria um repositório no GitHub (ex.: `poupanca`) e carrega para a raiz todos os ficheiros desta pasta.
-2. Settings → Pages → Source: "Deploy from a branch" → `main` / `(root)` → Save.
-3. Abre `https://O-TEU-UTILIZADOR.github.io/poupanca/` no iPhone.
+1. Carrega para a raiz do repositório estes ficheiros: `index.html`, `app.js`, `analise.js`, `style.css`, `sw.js`, `manifest.webmanifest` e a pasta `icons`.
+2. Settings → Pages → Deploy from a branch → `main` / `(root)`.
+3. Abre `https://O-TEU-UTILIZADOR.github.io/poupanca/` no telemóvel.
 
-## Instalar no iPhone
-Abre o link → botão Partilhar → "Adicionar ao ecrã principal".
+## Instalar
+- **iPhone:** abre o link no Safari → Partilhar → Adicionar ao ecrã principal.
+- **Android:** no Chrome, ⋮ → Instalar aplicação.
+
+## Testes
+Os testes estão em `testes/` (ver `docs/TESTES.md` e `docs/RESULTADOS.txt`). Não é preciso publicá-los.

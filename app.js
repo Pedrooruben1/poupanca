@@ -89,7 +89,7 @@ function normalize(d) {
 
 // ---------- Utilitários ----------
 const uid = () => (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(16).slice(2));
-const VERSION = 'v20';
+const VERSION = 'v21';
 const fmtEur = new Intl.NumberFormat('pt-PT', { style: 'currency', currency: 'EUR' });
 // Modo privado: valores escondidos; só aparecem enquanto manténs o dedo premido no olho.
 // Assim, ao sair da app (e o iOS tirar a imagem do seletor de apps) nunca há valores à vista.
@@ -270,7 +270,7 @@ function groupedBars(ms) {
 // ---------- Interface ----------
 const TABS = [['home', 'Início', '🏠'], ['entries', 'Movimentos', '⇄'], ['budgets', 'Orçamentos', '📊'], ['goals', 'Objetivos', '🎯'], ['accounts', 'Contas', '💳']];
 let tab = (() => { try { return localStorage.getItem('poupanca-tab') || 'home'; } catch (e) { return 'home'; } })();
-const ui = { f: { month: '', cat: '', acc: '', q: '' }, seg: 'accounts' };
+const ui = { f: { month: '', cat: '', acc: '', q: '' }, seg: 'accounts', view: 'list' };
 const $ = id => document.getElementById(id);
 
 function render(keepScroll) {
@@ -290,7 +290,7 @@ function entryRow(e) {
   const a = acc(e.accountId), d = acc(e.destId);
   const where = e.kind === 'transfer' ? `${esc(a?.name || '?')} → ${esc(d?.name || '?')}` : esc(a?.name || '');
   const sg = e.kind === 'expense' ? '-' : e.kind === 'income' ? '+' : '';
-  return `<button class="item" data-edit-entry="${e.id}"><div class="ico">${ico}</div><div class="grow"><div>${esc(name)}${e.recId ? ' 🔁' : ''}</div><div class="sub">${fmtDate(e.date)} · ${where}</div></div><div class="amt ${e.kind === 'income' ? 'pos' : ''}">${sg}${eur(e.amount)}</div></button>`;
+  return `<button class="item" data-edit-entry="${e.id}"><div class="ico">${ico}</div><div class="grow"><div>${esc(name)}${e.recId ? ' 🔁' : ''}</div><div class="sub">${fmtDate(e.date)}${e.date > today() ? ' · agendado' : ''} · ${where}</div></div><div class="amt ${e.kind === 'income' ? 'pos' : ''}">${sg}${eur(e.amount)}</div></button>`;
 }
 
 function home() {
@@ -330,6 +330,7 @@ function home() {
   <h2>Património</h2>
   <div class="card kv"><div><span>Disponível</span><b>${eur(spendable())}</b></div><div><span>Poupança</span><b>${eur(savingsTotal())}</b></div><div><span>Investido</span><b>${eur(investedAccounts() + assets())}</b></div><div><span>Dívidas</span><b class="${debts() ? 'neg' : ''}">${debts() ? '-' : ''}${eur(debts())}</b></div><div class="tot"><span>Património líquido</span><b>${eur(netWorth())}</b></div></div>
   <h2>Evolução do saldo</h2><div class="card">${db.entries.length || db.accounts.length ? lineChart(pts) : '<p class="sub">Sem dados ainda.</p>'}</div>
+  ${db.accounts.length ? '<button class="item linkcard" data-act="open-analysis"><div class="ico">📈</div><div class="grow"><div>Ver análise completa</div><div class="sub">Saldo dia a dia, receitas, despesas e categorias</div></div><span aria-hidden="true">›</span></button>' : ''}
   <h2>Receitas vs. despesas</h2><div class="card">${groupedBars(ms)}</div>
   <h2>Despesas por categoria</h2>
   <div class="card">${cats.length ? cats.map(([c, v]) => `<div class="catrow"><span>${CATS[c][1]} ${CATS[c][0]}</span><span class="sub">${eur(v)} · ${Math.round((v / exp) * 100)}%</span></div>${bar(v / cats[0][1])}`).join('') : '<p class="sub">Ainda não há despesas este mês.</p>'}</div>
@@ -347,16 +348,18 @@ function filtered() {
       || (numQ && [String(e.amount).replace('.', ','), e.amount.toFixed(2).replace('.', ',')].some(a => a.includes(qn)))));
 }
 function entriesList() {
-  const l = filtered();
-  const inc = l.filter(e => e.kind === 'income').reduce((s, e) => s + e.amount, 0), exp = l.filter(e => e.kind === 'expense').reduce((s, e) => s + e.amount, 0);
+  const l = filtered(), T = today(), past = l.filter(e => e.date <= T), future = l.length - past.length; // os agendados não entram nos totais
+  const inc = past.filter(e => e.kind === 'income').reduce((s, e) => s + e.amount, 0), exp = past.filter(e => e.kind === 'expense').reduce((s, e) => s + e.amount, 0);
   if (!l.length) return emptyBox('🔍', db.entries.length ? 'Nenhum movimento com estes filtros.' : 'Ainda não há movimentos. Toca em + para registar.');
   return `<div class="card kv"><div><span>Receitas</span><b class="pos">${eur(inc)}</b></div><div><span>Despesas</span><b>${eur(exp)}</b></div><div><span>Resultado</span><b class="${inc - exp < 0 ? 'neg' : 'pos'}">${eur(inc - exp)}</b></div></div>
-  <div class="list">${l.map(entryRow).join('')}</div><p class="note">Toca num movimento para o editar ou apagar. 🔁 = criado por uma regra recorrente.</p>`;
+  <div class="list">${l.map(entryRow).join('')}</div><p class="note">Toca num movimento para o editar ou apagar. 🔁 = criado por uma regra recorrente.${future ? ` ${future} movimento(s) agendado(s) (data futura) não entram nos totais.` : ''}</p>`;
 }
 function entries() {
   if (!db.accounts.length) return emptyBox('⇄', 'Adiciona primeiro uma conta no separador Contas.');
+  const vseg = `<div class="seg" id="vseg" role="group" aria-label="Vista" style="margin-bottom:12px">${[['list', 'Movimentos'], ['analysis', 'Análise']].map(([k, l]) => `<button data-view="${k}" class="${ui.view === k ? 'on' : ''}" aria-pressed="${ui.view === k}">${l}</button>`).join('')}</div>`;
+  if (ui.view === 'analysis') return vseg + (typeof analysisView === 'function' ? analysisView() : '<p class="note">Falta o ficheiro analise.js. Carrega-o junto com os restantes ficheiros da app.</p>');
   const months = [...new Set([curMonth(), ...db.entries.map(e => e.date.slice(0, 7))])].sort().reverse(), f = ui.f;
-  return `<input id="q" type="search" aria-label="Pesquisar movimentos" placeholder="🔍 Pesquisar por descrição, valor ou categoria" value="${esc(f.q)}">
+  return vseg + `<input id="q" type="search" aria-label="Pesquisar movimentos" placeholder="🔍 Pesquisar por descrição, valor ou categoria" value="${esc(f.q)}">
   <div class="filters"><select data-f="month" aria-label="Filtrar por mês"><option value="">Todos os meses</option>${months.map(m => `<option value="${m}" ${f.month === m ? 'selected' : ''}>${monthName(m, true)}</option>`).join('')}</select>
   <select data-f="cat" aria-label="Filtrar por categoria"><option value="">Todas as categorias</option>${opts(CATS, f.cat)}</select>
   <select data-f="acc" aria-label="Filtrar por conta"><option value="">Todas as contas</option>${accOpts(f.acc)}</select></div>
@@ -707,6 +710,8 @@ document.addEventListener('click', ev => {
   if (d.tab) go(d.tab);
   else if (t.id === 'add') add();
   else if (d.quick) entryForm(null, d.quick);
+  else if (d.view) { ui.view = d.view; render(true); }
+  else if (d.act === 'open-analysis') { ui.view = 'analysis'; go('entries'); }
   else if (d.seg) { ui.seg = d.seg; render(true); }
   else if (d.editEntry) entryForm(d.editEntry);
   else if (d.editBudget) budgetForm(d.editBudget);
