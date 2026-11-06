@@ -2,7 +2,7 @@
 
 App pessoal de finanças. Os dados ficam só no telemóvel, sem servidor nem conta.
 
-Versão **v21**: acrescenta a **Análise financeira** (Fase 1) em Movimentos → Análise. A descrição completa está em `docs/ALTERACOES.md`.
+Versão **v22**: acrescenta a **Análise financeira** (Fase 1) em Movimentos → Análise. A descrição completa está em `docs/ALTERACOES.md`.
 
 ## Publicar no GitHub Pages
 1. Carrega para a raiz do repositório estes ficheiros: `index.html`, `app.js`, `analise.js`, `style.css`, `sw.js`, `manifest.webmanifest` e a pasta `icons`.

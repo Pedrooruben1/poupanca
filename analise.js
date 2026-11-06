@@ -153,13 +153,16 @@ function anControls(range) {
   <div class="an-chips"><button class="an-chip ${AN.accs ? 'on' : ''}" data-an="accs">🏦 ${accTxt}</button><button class="an-chip ${AN.cats ? 'on' : ''}" data-an="cats">🏷️ ${catTxt}</button>${AN.accs || AN.cats ? '<button class="an-chip" data-an="clear">✕ Limpar filtros</button>' : ''}</div>`;
 }
 
+let anSemTxt = 'sem movimentos no período anterior'; // diz que intervalo se comparou (definido em anCards)
 function anDelta(cur, prv, goodUp, has, name) {
-  if (!has) return '<small class="sub">sem dados do período anterior</small>';
+  if (!has) return `<small class="sub">${anSemTxt}</small>`;
   const d = cur - prv; if (d === 0) return `<small class="sub">= igual ao ${name}</small>`;
   return `<small class="${(d > 0) === goodUp ? 'pos' : 'neg'}">${d > 0 ? '▲' : '▼'} ${anEur(Math.abs(d))} vs. ${name}</small>`;
 }
 function anCards(m, catOn) {
   const T = today(), pn = anPrevName(AN.mode, m.range, T), has = m.prevAgg.n > 0, est = f => (f ? '<small class="warnt">estimado</small>' : '');
+  const dm = { day: 'numeric', month: 'short' }, ra = anDate(m.prev.start, dm), rb = anDate(m.prev.end, dm);
+  anSemTxt = m.prev.start === m.prev.end ? `sem movimentos em ${ra}` : `sem movimentos de ${ra} a ${rb}`;
   const res = m.inc - m.expAll, pres = m.prevAgg.inc - m.prevAgg.expAll, rate = m.inc > 0 ? (res / m.inc) * 100 : null;
   const avg = m.elapsed ? Math.round(m.exp / m.elapsed) : 0;
   const pDays = anNum(m.prev.end) - anNum(m.prev.start) + 1, pAvg = pDays > 0 ? Math.round((catOn ? anSelExp(m.prevAgg.byCat) : m.prevAgg.expAll) / pDays) : 0;

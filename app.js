@@ -89,7 +89,7 @@ function normalize(d) {
 
 // ---------- Utilitários ----------
 const uid = () => (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(16).slice(2));
-const VERSION = 'v21';
+const VERSION = 'v22';
 const fmtEur = new Intl.NumberFormat('pt-PT', { style: 'currency', currency: 'EUR' });
 // Modo privado: valores escondidos; só aparecem enquanto manténs o dedo premido no olho.
 // Assim, ao sair da app (e o iOS tirar a imagem do seletor de apps) nunca há valores à vista.
@@ -191,7 +191,7 @@ function goalInfo(g) {
   if (remaining === 0) { info.status = 'Concluído ✅'; info.tone = 'pos'; return info; }
   if (g.deadline) {
     const days = (parseD(g.deadline) - parseD(today())) / 864e5;
-    if (days < 0) { info.status = 'Prazo ultrapassado'; info.tone = 'neg'; info.need = remaining; return info; }
+    if (days < 0) { info.status = 'Prazo ultrapassado'; info.tone = 'neg'; return info; } // sem «poupança mensal necessária»: já não há meses
     info.need = remaining / Math.max(1, Math.ceil(days / 30.44));
     const total = Math.max((parseD(g.deadline) - parseD(g.created)) / 864e5, 1), frac = Math.min(Math.max((total - days) / total, 0), 1);
     const expected = g.base + (g.target - g.base) * frac, diff = saved - expected, tol = g.target * .02;
@@ -373,7 +373,7 @@ function budgets() {
     return `${emptyBox('📊', 'Define limites mensais por categoria e recebe alertas aos 80% e 100%.')}<button class="btn main" data-act="new">Criar o primeiro orçamento</button>`;
   }
   const tot = db.budgets.reduce((s, b) => s + b.limit, 0), totSpent = db.budgets.reduce((s, b) => s + sumEntries('expense', ym, b.category), 0);
-  return `<div class="card"><div class="between"><b>Total em ${monthName(ym, true)}</b><span class="sub">${eur(totSpent)} / ${eur(tot)}</span></div>${bar(totSpent / Math.max(tot, .01), totSpent > tot ? 'over' : '')}</div>
+  return `<div class="card"><div class="between"><b>Total em ${monthName(ym, true)}</b><span class="sub">${eur(totSpent)} / ${eur(tot)}</span></div>${bar(totSpent / Math.max(tot, .01), totSpent >= tot ? 'over' : totSpent >= tot * 0.8 ? 'warn' : '')}${totSpent >= tot * 0.8 ? `<div class="sub ${totSpent >= tot ? 'neg' : 'warnt'}">${pctOf(totSpent / Math.max(tot, .01))}% · ${totSpent >= tot ? 'Excedido' : 'Atenção'}</div>` : ''}</div>
   <div class="list">${db.budgets.map(b => {
     const s = sumEntries('expense', ym, b.category), p = s / Math.max(b.limit, .01), ps = sumEntries('expense', prev, b.category);
     const st = p >= 1 ? ['Excedido', 'neg'] : p >= .8 ? ['Atenção', 'warnt'] : ['Dentro do limite', 'pos'];
@@ -407,7 +407,7 @@ function accounts() {
   const list = db.accounts.length
     ? `<div class="list">${db.accounts.map(a => `<button class="item" data-edit-account="${a.id}"><div class="ico">${KINDS[a.kind][1]}</div><div class="grow"><div>${esc(a.name)}</div><div class="sub">${KINDS[a.kind][0]}</div></div><div class="amt">${eur(balance(a))}</div></button>`).join('')}</div>`
     : emptyBox('💳', 'Toca em + para adicionar a primeira conta.');
-  return `${seg}${list}<p class="note">Introduz o saldo atual. Transferências entre contas não contam como despesa. Toca numa conta para ver o histórico.</p>
+  return `${seg}${list}<p class="note">Ao criar uma conta, escreve o saldo que tens hoje; depois o saldo muda com os movimentos. Para o acertar, edita o «saldo inicial» da conta (isto também muda o histórico). Transferências entre contas não contam como despesa. Toca numa conta para ver o histórico.</p>
   <h2>Cópia de segurança</h2><div class="card"><p class="sub" style="margin-top:0">Os dados ficam só neste telemóvel. Exporta uma cópia todos os meses e guarda o ficheiro num sítio seguro fora da app (iCloud ou Ficheiros no iPhone, Google Drive ou Ficheiros no Android).</p>
   <div class="alert ${backupStatus().tone}" style="margin:8px 0 0">${backupStatus().icon} ${backupStatus().text}</div>
   <div class="btns" style="margin-top:8px"><button class="btn" data-act="export">Exportar</button><button class="btn" data-act="import">Importar</button></div>${(() => { try { return localStorage.getItem(UNDOKEY) ? '<button class="btn" data-act="undo-import" style="width:100%;margin-top:8px">Desfazer a última importação</button>' : ''; } catch (e) { return ''; } })()}</div><input id="file" type="file" accept=".json,application/json" hidden>
@@ -418,11 +418,14 @@ function accounts() {
   <p class="note" style="text-align:center">Poupança ${VERSION}</p>`;
 }
 function recurringView() {
-  const up = upcoming(plusDays(30)), out = up.filter(u => u.rec.kind === 'expense').reduce((s, u) => s + u.rec.amount, 0), inn = up.filter(u => u.rec.kind === 'income').reduce((s, u) => s + u.rec.amount, 0);
+  // Recorrentes previstas + movimentos agendados (data futura) dos próximos 30 dias: os mesmos que a previsão do Início já conta.
+  const prev = upcoming(plusDays(30)).map(u => ({ date: u.date, kind: u.rec.kind, name: u.rec.name, amount: u.rec.amount, tag: '' }));
+  const ag = db.entries.filter(e => e.date > today() && e.date <= plusDays(30) && e.kind !== 'transfer').map(e => ({ date: e.date, kind: e.kind, name: e.note || (e.kind === 'expense' ? CATS[e.category]?.[0] : ENTRY[e.kind]), amount: e.amount, tag: ' · agendado' }));
+  const prox = [...prev, ...ag].sort((a, b) => a.date.localeCompare(b.date)), out = prox.filter(u => u.kind === 'expense').reduce((s, u) => s + u.amount, 0), inn = prox.filter(u => u.kind === 'income').reduce((s, u) => s + u.amount, 0);
   const list = db.recurring.length ? `<div class="list">${db.recurring.map(r => `<button class="item" data-edit-rec="${r.id}"><div class="ico">${r.kind === 'income' ? '↙' : r.kind === 'transfer' ? '⇄' : CATS[r.category]?.[1] || '📦'}</div><div class="grow"><div>${esc(r.name)}${r.active ? '' : ' (pausada)'}</div><div class="sub">${FREQ[r.freq]} · próxima: ${fmtDate(r.next)}</div></div><div class="amt ${r.kind === 'income' ? 'pos' : ''}">${r.kind === 'expense' ? '-' : r.kind === 'income' ? '+' : ''}${eur(r.amount)}</div></button>`).join('')}</div>`
     : emptyBox('🔁', 'Regista salário, renda, ginásio, subscrições, seguros ou prestações. Os movimentos são criados automaticamente nas datas certas.');
   return `<div class="card kv"><div><span>A pagar (30 dias)</span><b>${eur(out)}</b></div><div><span>A receber (30 dias)</span><b class="pos">${eur(inn)}</b></div></div>
-  ${up.length ? `<h2>Próximos 30 dias</h2><div class="list">${up.map(u => `<div class="item"><div class="ico">${u.rec.kind === 'income' ? '↙' : '📅'}</div><div class="grow"><div>${esc(u.rec.name)}</div><div class="sub">${fmtDate(u.date)}</div></div><div class="amt ${u.rec.kind === 'income' ? 'pos' : ''}">${u.rec.kind === 'expense' ? '-' : u.rec.kind === 'income' ? '+' : ''}${eur(u.rec.amount)}</div></div>`).join('')}</div>` : ''}
+  ${prox.length ? `<h2>Próximos 30 dias</h2><div class="list">${prox.map(u => `<div class="item"><div class="ico">${u.kind === 'income' ? '↙' : '📅'}</div><div class="grow"><div>${esc(u.name)}</div><div class="sub">${fmtDate(u.date)}${u.tag}</div></div><div class="amt ${u.kind === 'income' ? 'pos' : ''}">${u.kind === 'expense' ? '-' : u.kind === 'income' ? '+' : ''}${eur(u.amount)}</div></div>`).join('')}</div>` : ''}
   <h2>Regras recorrentes</h2>${list}<button class="btn main" data-act="new" style="margin-top:8px">+ Nova recorrente</button>`;
 }
 function investView() {
@@ -431,7 +434,7 @@ function investView() {
     return `<button class="item" data-edit-inv="${i.id}"><div class="ico">${i.type === 'divida' ? '💳' : '📈'}</div><div class="grow"><div>${esc(i.name)}</div><div class="sub">${INV[i.type]}${i.type !== 'divida' ? ` · investido ${eur(i.invested)}` : ''}</div></div>
     <div style="text-align:right"><div class="amt ${i.type === 'divida' ? 'neg' : ''}">${i.type === 'divida' ? '-' : ''}${eur(i.current)}</div>${i.type !== 'divida' && rp !== null ? `<div class="sub ${gain >= 0 ? 'pos' : 'neg'}">${gain >= 0 ? '+' : ''}${pct(rp)}</div>` : ''}</div></button>`;
   }).join('')}</div>` : emptyBox('📈', 'Regista ETFs, ações, cripto, depósitos, certificados de aforro e dívidas.');
-  return `<div class="card kv"><div><span>Disponível</span><b>${eur(spendable())}</b></div><div><span>Poupança</span><b>${eur(savingsTotal())}</b></div><div><span>Investido</span><b>${eur(investedAccounts() + assets())}</b></div><div><span>Dívidas</span><b>${eur(debts())}</b></div><div class="tot"><span>Património líquido</span><b>${eur(netWorth())}</b></div></div>
+  return `<div class="card kv"><div><span>Disponível</span><b>${eur(spendable())}</b></div><div><span>Poupança</span><b>${eur(savingsTotal())}</b></div><div><span>Investido</span><b>${eur(investedAccounts() + assets())}</b></div><div><span>Dívidas</span><b class="${debts() ? 'neg' : ''}">${debts() ? '-' : ''}${eur(debts())}</b></div><div class="tot"><span>Património líquido</span><b>${eur(netWorth())}</b></div></div>
   <h2>Investimentos e dívidas</h2>${list}<button class="btn main" data-act="new" style="margin-top:8px">+ Novo investimento / dívida</button>
   <p class="note">O valor atual é introduzido por ti. O dinheiro investido fica separado do disponível para gastar.</p>`;
 }
@@ -568,7 +571,8 @@ function goalForm(id) {
   const g = id ? db.goals.find(x => x.id === id) : null; form = { type: 'goal', id };
   openSheet(`<h2>${g ? 'Editar objetivo' : 'Novo objetivo'}</h2><label>Objetivo</label><input name="name" placeholder="ex.: Viagem" value="${g ? esc(g.name) : ''}">
   <label>Valor pretendido em €</label><input name="target" inputmode="decimal" value="${g ? num(g.target) : ''}">
-  <label>Já tenho poupado em €</label><input name="saved" inputmode="decimal" placeholder="0" value="${g ? num(g.saved) : ''}">
+  <label>Já tenho poupado (à mão) em €</label><input name="saved" inputmode="decimal" placeholder="0" value="${g ? num(g.saved) : ''}">
+  ${g && goalInfo(g).contrib ? `<p class="note" style="margin:4px 4px 0">Além deste valor, há <b>${goalInfo(g).contrib < 0 ? '-' : '+'}${fmtEur.format(Math.abs(goalInfo(g).contrib)).replace(/−/g, '-')}</b> de movimentos associados ao objetivo (por isso o cartão mostra ${fmtEur.format(goalInfo(g).saved)}). Aqui só editas o que poupaste à mão.</p>` : ''}
   <label>Prazo (opcional)</label><input name="deadline" type="date" value="${g?.deadline || ''}">${buttons(id)}`);
 }
 function recForm(id) {
@@ -589,6 +593,19 @@ function invForm(id) {
 }
 
 const optMoney = raw => (raw.trim() === '' ? 0 : parseMoney(raw));
+// Dinheiro físico e poupança não costumam ficar negativos: avisa (sem impedir) se este movimento deixar a conta de origem abaixo de zero.
+// Contas à ordem podem ficar a descoberto, por isso não avisam.
+function avisoNegativo(e, old) {
+  if (e.kind === 'income' || e.date > today()) return '';
+  const a = acc(e.accountId); if (!a || !['carteira', 'poupanca'].includes(a.kind)) return '';
+  const antes = balance(a), guardadas = db.entries;
+  db.entries = old ? guardadas.map(x => (x.id === old.id ? e : x)) : [...guardadas, e];
+  const depois = balance(a); db.entries = guardadas;
+  if (depois >= 0 || depois >= antes - 1e-9) return '';
+  return `«${a.name}» ficaria com saldo negativo (${fmtEur.format(depois).replace(/−/g, '-')}). Em dinheiro físico ou poupança isso normalmente não é possível: confirma o saldo inicial e os movimentos. Guardar mesmo assim?`;
+}
+// Mensagem certa para cada erro: texto que não é número («abc», «12.5.3») ou número que não é maior que zero.
+const msgValor = (raw, nome) => (parseMoney(raw) === null ? `O ${nome} não é válido. Usa só números, por exemplo 12,50.` : `Indica um ${nome} maior que zero.`);
 function saveForm() {
   const { type, id } = form;
   if (type === 'account') {
@@ -597,7 +614,7 @@ function saveForm() {
     if (id) Object.assign(acc(id), { name, kind: val('kind'), opening: amount }); else db.accounts.push({ id: uid(), name, kind: val('kind'), opening: amount });
   } else if (type === 'entry' || type === 'rec') {
     const amount = parseMoney(val('amount')), kind = form.kind, isRec = type === 'rec';
-    if (!amount) return showErr('Indica um valor maior que zero.');
+    if (!amount) return showErr(msgValor(val('amount'), 'valor'));
     if (isRec && !val('name').trim()) return showErr('Indica um nome.');
     if (kind === 'transfer' && (!val('dest') || val('dest') === val('account'))) return showErr('Escolhe uma conta de destino diferente da conta de origem.');
     if (!/^\d{4}-\d{2}-\d{2}$/.test(val('date'))) return showErr('Indica uma data válida.');
@@ -611,17 +628,19 @@ function saveForm() {
     } else {
       const old = id ? db.entries.find(x => x.id === id) : null;
       const e = { id: id || uid(), date: val('date') || today(), note: val('note').trim(), recId: old?.recId || null, ...base };
+      const aviso = avisoNegativo(e, old); if (aviso && !confirm(aviso)) return; // só avisa: quem escolhe és tu
       if (id) db.entries[db.entries.findIndex(x => x.id === id)] = e; else { db.entries.push(e); try { localStorage.setItem('poupanca-lastacc', e.accountId); } catch (x) {} }
     }
   } else if (type === 'budget') {
     const limit = parseMoney(val('amount')), category = val('category');
-    if (!limit) return showErr('Indica um limite maior que zero.');
+    if (!limit) return showErr(msgValor(val('amount'), 'limite'));
     if (db.budgets.some(b => b.category === category && b.id !== id)) return showErr('Já existe um orçamento para esta categoria. Edita esse ou escolhe outra.');
     db.budgets = db.budgets.filter(b => b.category !== category && b.id !== id); db.budgets.push({ id: id || uid(), category, limit });
   } else if (type === 'goal') {
     const name = val('name').trim(), target = parseMoney(val('target')), saved = optMoney(val('saved'));
     if (!name || !target || saved === null) return showErr('Preenche o nome e o valor pretendido (maior que zero). Os outros campos aceitam números como 120,50.');
-    const old = id ? db.goals.find(x => x.id === id) : null, s = Math.min(saved, target);
+    // O valor poupado à mão guarda-se como foi escrito: não se corta ao valor pretendido (baixar o alvo e voltar a subir não pode fazer perder dinheiro).
+    const old = id ? db.goals.find(x => x.id === id) : null, s = saved;
     const g = { id: id || uid(), name, target, saved: s, deadline: val('deadline'), created: old?.created || today(), base: old ? old.base : s };
     if (id) db.goals[db.goals.findIndex(x => x.id === id)] = g; else db.goals.push(g);
   } else if (type === 'inv') {
@@ -633,14 +652,23 @@ function saveForm() {
   save(); closeSheet(); render();
 }
 
+// A confirmação diz o que vai ser apagado e que não se pode desfazer.
+function msgApagar(type, id) {
+  const eurTxt = n => fmtEur.format(n).replace(/−/g, '-');
+  if (type === 'entry') { const e = db.entries.find(x => x.id === id); return e ? `Apagar o movimento «${e.note || (e.kind === 'expense' ? CATS[e.category]?.[0] : ENTRY[e.kind])}» de ${eurTxt(e.amount)} (${fmtDate(e.date)})? O saldo da conta volta ao que era sem ele. Não dá para desfazer.` : 'Apagar este movimento? Não dá para desfazer.'; }
+  if (type === 'goal') return `Apagar o objetivo «${db.goals.find(x => x.id === id)?.name || ''}»? Os movimentos associados mantêm-se, mas deixam de contar para ele. Não dá para desfazer.`;
+  if (type === 'budget') return `Apagar o orçamento de ${CATS[db.budgets.find(x => x.id === id)?.category]?.[0] || 'esta categoria'}? Não dá para desfazer.`;
+  if (type === 'rec') return `Apagar a regra recorrente «${db.recurring.find(x => x.id === id)?.name || ''}»? Os movimentos que já criou mantêm-se. Não dá para desfazer.`;
+  return `Apagar «${db.invest.find(x => x.id === id)?.name || ''}»? Não dá para desfazer.`;
+}
 function deleteForm() {
   const { type, id } = form;
   if (type === 'account') {
     if (db.entries.some(e => e.accountId === id || e.destId === id) || db.recurring.some(r => r.accountId === id || r.destId === id)) return toast('Esta conta tem movimentos ou regras recorrentes. Apaga ou altera primeiro esses registos.');
-    if (!confirm('Apagar esta conta?')) return;
+    if (!confirm(`Apagar a conta «${acc(id)?.name || ''}»? Não dá para desfazer.`)) return;
     db.accounts = db.accounts.filter(a => a.id !== id);
   } else {
-    if (!confirm('Apagar?')) return;
+    if (!confirm(msgApagar(type, id))) return;
     const key = { entry: 'entries', budget: 'budgets', goal: 'goals', rec: 'recurring', inv: 'invest' }[type];
     db[key] = db[key].filter(x => x.id !== id);
     if (type === 'goal') { db.entries.forEach(e => { if (e.goalId === id) e.goalId = null; }); db.recurring.forEach(r => { if (r.goalId === id) r.goalId = null; }); }
