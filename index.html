@@ -16,12 +16,13 @@
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
-<header id="top"><h1 id="title">Poupança</h1><div class="hr"><button id="eye" aria-label="Mostrar valores (mantém premido; com leitor de ecrã, toca duas vezes)" aria-pressed="false">👁️</button><button id="add" aria-label="Adicionar">+</button></div></header>
+<header id="top"><h1 id="title">Poupança</h1><div class="hr"><button id="eye" aria-label="Mostrar valores (mantém premido; com leitor de ecrã, toca duas vezes)" aria-pressed="false">👁️</button><button id="defs" aria-label="Definições">⚙️</button><button id="add" aria-label="Adicionar">+</button></div></header>
 <main id="view"></main>
 <nav id="tabs"></nav>
 <div id="cover"><div>🔒<br>Poupança</div></div>
 <div id="lock" hidden role="dialog" aria-modal="true" aria-label="Bloqueio com PIN"></div>
 <div id="sheet-bg" hidden><div id="sheet" role="dialog" aria-modal="true"></div></div>
+<input id="file" type="file" accept=".json,application/json" hidden>
 <script src="analise.js"></script>
 <script src="app.js"></script>
 </body>

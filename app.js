@@ -54,10 +54,10 @@ function normalize(d) {
   normFixes = 0;
   // tipos de conta: aceita as chaves, os nomes em português e variantes (maiúsculas, acentos); o resto vira conta à ordem
   const kindWords = { ordem: 'ordem', 'conta a ordem': 'ordem', banco: 'ordem', poupanca: 'poupanca', carteira: 'carteira', dinheiro: 'carteira', 'dinheiro fisico': 'carteira', investimento: 'investimento', investimentos: 'investimento' };
-  const kindMap = new Proxy({}, { get: (_, k) => kindWords[norm(String(k)).trim()] });
+  const kindMap = new Proxy({}, { get: (_, k) => { const w = norm(String(k)).trim(); return own(kindWords, w) ? kindWords[w] : undefined; } });
   const entryMap = { Entrada: 'income', Despesa: 'expense', 'Transferência': 'transfer' };
   const catMap = Object.fromEntries(Object.entries(CATS).map(([k, v]) => [v[0], k])); catMap.Casa = 'habitacao'; catMap.casa = 'habitacao';
-  const cat = c => (CATS[c] ? c : catMap[c] || 'outros');
+  const cat = c => (own(CATS, c) ? c : own(catMap, c) ? catMap[c] : 'outros');
   const num0 = v => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
   // ids só com letras, números, _ e - (impede código injetado através de um ficheiro alterado)
   const sid = v => String(v ?? '').replace(/[^A-Za-z0-9_-]/g, '').slice(0, 64) || null;
@@ -72,14 +72,14 @@ function normalize(d) {
     return String(x);
   };
   // datas da app Swift (segundos desde 2001): converte para o dia no fuso do telemóvel
-  const date = x => (typeof x === 'number' ? ymd(new Date((x + 978307200) * 1000)) : dateOk(String(x).slice(0, 10)) || today());
+  const date = x => (typeof x === 'number' ? dateOk(ymd(new Date((x + 978307200) * 1000))) : dateOk(String(x).slice(0, 10))) || today();
   const str = (v, d) => String(v ?? '').slice(0, 200) || d;
   const t = today();
   const objs = v => (Array.isArray(v) ? v : []).filter(x => x && typeof x === 'object' && !Array.isArray(x)); // ignora itens que não são objetos (ex.: null)
-  const pick = (v, table, dflt) => (table[v] ? v : dflt);
+  const pick = (v, table, dflt) => (own(table, v) ? v : dflt);
   return {
     accounts: objs(d.accounts).map(a => ({ id: id(a.id), name: str(a.name, 'Conta'), kind: pick(kindMap[a.kind] || a.kind, KINDS, 'ordem'), opening: num0(a.opening ?? a.openingBalance) })),
-    entries: objs(d.entries).map(e => ({ id: id(e.id), date: date(e.date), kind: pick(entryMap[e.kind] || e.kind, ENTRY, 'expense'), amount: Math.abs(num0(e.amount)), accountId: sid(e.accountId ?? e.accountID), destId: sid(e.destId ?? e.destinationID), category: cat(e.category), note: str(e.note, ''), goalId: sid(e.goalId), recId: sid(e.recId) })),
+    entries: objs(d.entries).map(e => ({ id: id(e.id), date: date(e.date), kind: pick(own(entryMap, e.kind) ? entryMap[e.kind] : e.kind, ENTRY, 'expense'), amount: Math.abs(num0(e.amount)), accountId: sid(e.accountId ?? e.accountID), destId: sid(e.destId ?? e.destinationID), category: cat(e.category), note: str(e.note, ''), goalId: sid(e.goalId), recId: sid(e.recId) })),
     budgets: objs(d.budgets).map(b => ({ id: id(b.id), category: cat(b.category), limit: Math.abs(num0(b.limit ?? b.monthlyLimit)) })),
     goals: objs(d.goals).map(g => ({ id: id(g.id), name: str(g.name, 'Objetivo'), target: Math.abs(num0(g.target)), saved: Math.abs(num0(g.saved)), deadline: dateOk(g.deadline), created: dateOk(g.created) || t, base: Math.abs(num0(g.base ?? g.saved)) })),
     recurring: objs(d.recurring).map(r => { const next = dateOk(r.next) || t; return { id: id(r.id), name: str(r.name, 'Recorrente'), kind: pick(r.kind, ENTRY, 'expense'), amount: Math.abs(num0(r.amount)), accountId: sid(r.accountId), destId: sid(r.destId), category: cat(r.category), goalId: sid(r.goalId), freq: pick(r.freq, FREQ, 'monthly'), next, day: Math.min(Math.max(Math.round(num0(r.day)) || +next.slice(8, 10), 1), 31), active: r.active !== false }; }),
@@ -89,7 +89,12 @@ function normalize(d) {
 
 // ---------- Utilitários ----------
 const uid = () => (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(16).slice(2));
-const VERSION = 'v22';
+const own = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
+// Dinheiro somado em cêntimos inteiros: somar decimais diretamente deixa restos (0,1 + 0,2 ≠ 0,3) que davam «-0,00 €».
+const cents = x => Math.round(x * 100);
+// As mesmas regras que a app aplica ao abrir os dados (normalize): só datas reais entre 1900 e 2200.
+const dataValida = s => { const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s || ''); if (!m) return false; const y = +m[1], mo = +m[2], d = +m[3]; return y >= 1900 && y <= 2200 && mo >= 1 && mo <= 12 && d >= 1 && d <= new Date(Date.UTC(y, mo, 0)).getUTCDate(); };
+const VERSION = 'v24';
 const fmtEur = new Intl.NumberFormat('pt-PT', { style: 'currency', currency: 'EUR' });
 // Modo privado: valores escondidos; só aparecem enquanto manténs o dedo premido no olho.
 // Assim, ao sair da app (e o iOS tirar a imagem do seletor de apps) nunca há valores à vista.
@@ -97,7 +102,7 @@ const PRIVKEY = 'poupanca-privacy';
 let reveal = false;
 const privacyOn = () => { try { return localStorage.getItem(PRIVKEY) !== '0'; } catch (e) { return true; } };
 const masked = () => privacyOn() && !reveal;
-const eur = n => (masked() ? '••••' : fmtEur.format(n).replace(/\u2212/g, '-'));
+const eur = n => (masked() ? '••••' : fmtEur.format(Math.abs(n) < 0.005 ? 0 : n).replace(/\u2212/g, '-'));
 function setReveal(on) { if (reveal === on) return; reveal = on; render(true); }
 const ymd = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 const today = () => ymd(new Date());
@@ -124,25 +129,26 @@ function balance(a) {
   const t = today();
   return db.entries.reduce((b, e) => {
     if (e.date > t) return b; // movimentos agendados só contam a partir da data
-    if (e.kind === 'transfer') return e.accountId === a.id ? b - e.amount : e.destId === a.id ? b + e.amount : b;
+    const v = cents(e.amount);
+    if (e.kind === 'transfer') return e.accountId === a.id ? b - v : e.destId === a.id ? b + v : b;
     if (e.accountId !== a.id) return b;
-    return b + (e.kind === 'income' ? e.amount : -e.amount);
-  }, a.opening);
+    return b + (e.kind === 'income' ? v : -v);
+  }, cents(a.opening)) / 100;
 }
-const sumKinds = kinds => db.accounts.filter(a => kinds.includes(a.kind)).reduce((s, a) => s + balance(a), 0);
+const sumKinds = kinds => db.accounts.filter(a => kinds.includes(a.kind)).reduce((s, a) => s + cents(balance(a)), 0) / 100;
 const isSpend = id => ['ordem', 'carteira'].includes(acc(id)?.kind);
 const spendable = () => sumKinds(['ordem', 'carteira']);
 const savingsTotal = () => sumKinds(['poupanca']);
 const investedAccounts = () => sumKinds(['investimento']);
-const assets = () => db.invest.filter(i => i.type !== 'divida').reduce((s, i) => s + i.current, 0);
-const debts = () => db.invest.filter(i => i.type === 'divida').reduce((s, i) => s + i.current, 0);
-const netWorth = () => spendable() + savingsTotal() + investedAccounts() + assets() - debts();
+const assets = () => db.invest.filter(i => i.type !== 'divida').reduce((s, i) => s + cents(i.current), 0) / 100;
+const debts = () => db.invest.filter(i => i.type === 'divida').reduce((s, i) => s + cents(i.current), 0) / 100;
+const netWorth = () => (cents(spendable()) + cents(savingsTotal()) + cents(investedAccounts()) + cents(assets()) - cents(debts())) / 100;
 
 const curMonth = () => today().slice(0, 7);
 // só conta movimentos até hoje (os agendados entram na previsão, não no que já aconteceu)
 const sumEntries = (kind, ym, cat, upToDay, t = today()) => db.entries
   .filter(e => e.kind === kind && e.date <= t && e.date.startsWith(ym) && (!cat || e.category === cat) && (!upToDay || +e.date.slice(8, 10) <= upToDay))
-  .reduce((s, e) => s + e.amount, 0);
+  .reduce((s, e) => s + cents(e.amount), 0) / 100;
 // mais recente primeiro; no mesmo dia, o último registado aparece em cima
 const pctOf = p => (p < 1 ? Math.min(99, Math.round(p * 100)) : Math.round(p * 100));
 const byDate = list => list.map((e, i) => [e, i]).sort((a, b) => b[0].date.localeCompare(a[0].date) || b[1] - a[1]).map(x => x[0]);
@@ -185,8 +191,9 @@ const sign = r => (r.kind === 'income' ? 1 : r.kind === 'expense' ? -1 : 0) * r.
 // ---------- Objetivos ----------
 function goalInfo(g) {
   // Transferência associada soma ao objetivo; despesa associada retira (gasto a partir do que estava poupado).
-  const contrib = db.entries.filter(e => e.goalId === g.id && e.date <= today()).reduce((s, e) => s + (e.kind === 'expense' ? -e.amount : e.amount), 0);
-  const saved = Math.max(g.saved + contrib, 0), remaining = Math.max(g.target - saved, 0), p = Math.min(saved / Math.max(g.target, .01), 1);
+  const contribC = db.entries.filter(e => e.goalId === g.id && e.date <= today()).reduce((s, e) => s + (e.kind === 'expense' ? -cents(e.amount) : cents(e.amount)), 0);
+  const savedC = Math.max(cents(g.saved) + contribC, 0), remainingC = Math.max(cents(g.target) - savedC, 0);
+  const contrib = contribC / 100, saved = savedC / 100, remaining = remainingC / 100, p = Math.min(savedC / Math.max(cents(g.target), 1), 1);
   const info = { saved, remaining, p, contrib, need: null, status: '', tone: '' };
   if (remaining === 0) { info.status = 'Concluído ✅'; info.tone = 'pos'; return info; }
   if (g.deadline) {
@@ -206,17 +213,17 @@ const lastBackup = () => { try { return localStorage.getItem(BKKEY) || ''; } cat
 function backupStatus() {
   const d = lastBackup();
   if (!d) return { tone: 'neg', icon: '🔴', text: 'Nunca fizeste uma cópia de segurança.' };
-  const days = Math.floor((parseD(today()) - parseD(d)) / 864e5);
+  const days = Math.round((parseD(today()) - parseD(d)) / 864e5);
   if (days >= 30) return { tone: 'warn', icon: '🟠', text: `A última cópia foi há ${days} dias (${fmtDate(d)}).`, days };
   return { tone: 'pos', icon: '🟢', text: `Última cópia: ${fmtDate(d)}${days ? ` (há ${days} dia${days > 1 ? 's' : ''})` : ' (hoje)'}.`, days };
 }
-function markBackup() { try { localStorage.setItem(BKKEY, today()); } catch (e) {} render(true); }
+function markBackup() { try { localStorage.setItem(BKKEY, today()); } catch (e) {} render(true); refreshDefs(); }
 
 // ---------- Alertas ----------
 function alerts() {
   const out = [], ym = curMonth(), prev = addMonthKey(ym, -1), day = +today().slice(8, 10);
   const bk = backupStatus();
-  if ((db.accounts.length || db.entries.length) && bk.tone !== 'pos') out.push([bk.tone, `${bk.text} Exporta uma cópia em Contas → Cópia de segurança.`]);
+  if ((db.accounts.length || db.entries.length) && bk.tone !== 'pos') out.push([bk.tone, `${bk.text} Exporta uma cópia nas Definições (⚙️).`]);
   for (const b of db.budgets) {
     const s = sumEntries('expense', ym, b.category), p = s / Math.max(b.limit, .01);
     if (p >= 1) out.push(['neg', `Excedeste o orçamento de ${CATS[b.category][0]}: ${eur(s)} de ${eur(b.limit)}.`]);
@@ -238,46 +245,17 @@ function alerts() {
   return out;
 }
 
-// ---------- Gráficos (SVG) ----------
-function monthEnds(n) {
-  const res = [], ym = curMonth();
-  for (let i = n - 1; i >= 0; i--) {
-    const k = addMonthKey(ym, -i);
-    const end = i === 0 ? today() : ymd(new Date(+k.slice(0, 4), +k.slice(5, 7), 0));
-    res.push({ k, end });
-  }
-  return res;
-}
-function lineChart(pts) {
-  const W = 340, H = 140, px = 14, top = 22, bot = 24;
-  const vs = pts.map(p => p.v), min = Math.min(...vs), max = Math.max(...vs), span = max - min || 1;
-  const x = i => px + (i * (W - 2 * px)) / Math.max(pts.length - 1, 1), y = v => top + (1 - (v - min) / span) * (H - top - bot);
-  const line = pts.map((p, i) => `${i ? 'L' : 'M'}${x(i).toFixed(1)},${y(p.v).toFixed(1)}`).join(' ');
-  const area = `${line} L${x(pts.length - 1)},${H - bot} L${x(0)},${H - bot} Z`;
-  return `<svg viewBox="0 0 ${W} ${H}" width="100%" role="img" aria-label="Evolução do saldo"><path d="${area}" style="fill:var(--forest);opacity:.12"/><path d="${line}" fill="none" style="stroke:var(--forest)" stroke-width="2.5" stroke-linejoin="round"/>
-  ${pts.map((p, i) => `<circle cx="${x(i)}" cy="${y(p.v)}" r="3.5" style="fill:var(--forest)"/><text x="${x(i)}" y="${H - 6}" text-anchor="middle" class="ax">${p.label}</text>`).join('')}
-  <text x="${x(pts.length - 1)}" y="${y(pts[pts.length - 1].v) - 8}" text-anchor="end" class="ax" style="font-weight:600">${eur(pts[pts.length - 1].v)}</text></svg>`;
-}
-function groupedBars(ms) {
-  const W = 340, H = 140, bot = 22, top = 8, max = Math.max(...ms.flatMap(m => [m.inc, m.exp]), 1), bw = 14, gap = (W - 2 * 14) / ms.length;
-  const h = v => (v / max) * (H - top - bot);
-  return `<svg viewBox="0 0 ${W} ${H}" width="100%" role="img" aria-label="Receitas versus despesas">${ms.map((m, i) => {
-    const cx = 14 + gap * i + gap / 2;
-    return `<rect x="${cx - bw - 1}" y="${H - bot - h(m.inc)}" width="${bw}" height="${h(m.inc)}" rx="3" style="fill:var(--green)"/><rect x="${cx + 1}" y="${H - bot - h(m.exp)}" width="${bw}" height="${h(m.exp)}" rx="3" style="fill:var(--orange)"/><text x="${cx}" y="${H - 6}" text-anchor="middle" class="ax">${m.label}</text>`;
-  }).join('')}</svg><div class="legend"><span><i style="background:var(--green)"></i>Receitas</span><span><i style="background:var(--orange)"></i>Despesas</span></div>`;
-}
-
 // ---------- Interface ----------
 const TABS = [['home', 'Início', '🏠'], ['entries', 'Movimentos', '⇄'], ['budgets', 'Orçamentos', '📊'], ['goals', 'Objetivos', '🎯'], ['accounts', 'Contas', '💳']];
-let tab = (() => { try { return localStorage.getItem('poupanca-tab') || 'home'; } catch (e) { return 'home'; } })();
+let tab = (() => { try { const t = localStorage.getItem('poupanca-tab'); return TABS.some(x => x[0] === t) ? t : 'home'; } catch (e) { return 'home'; } })();
 const ui = { f: { month: '', cat: '', acc: '', q: '' }, seg: 'accounts', view: 'list' };
 const $ = id => document.getElementById(id);
 
 function render(keepScroll) {
-  $('tabs').innerHTML = TABS.map(([k, l, i]) => `<button data-tab="${k}" class="${k === tab ? 'on' : ''}"><span>${i}</span>${l}</button>`).join('');
+  $('tabs').innerHTML = TABS.map(([k, l, i]) => `<button data-tab="${k}" class="${k === tab ? 'on' : ''}"${k === tab ? ' aria-current="page"' : ''}><span aria-hidden="true">${i}</span>${l}</button>`).join('');
   $('title').textContent = tab === 'home' ? 'Poupança' : TABS.find(t => t[0] === tab)[1];
   $('eye').hidden = !privacyOn(); $('eye').textContent = reveal ? '🙈' : '👁️'; $('eye').setAttribute('aria-pressed', String(reveal));
-  $('add').hidden = tab === 'home' || (tab === 'entries' && !db.accounts.length);
+  $('add').hidden = (tab === 'home' || tab === 'entries') && !db.accounts.length;
   $('view').innerHTML = { home, entries, budgets, goals, accounts }[tab]();
   if (!keepScroll) window.scrollTo(0, 0);
 }
@@ -299,7 +277,9 @@ function home() {
   const rate = inc > 0 ? ((inc - exp) / inc) * 100 : null;
   const delta = (cur, p, goodUp) => {
     if (!p) return '<small class="sub">sem dados do mês anterior</small>';
-    const d = cur - p, good = goodUp ? d >= 0 : d <= 0;
+    const d = cur - p;
+    if (Math.abs(d) < 0.005) return '<small class="sub">= igual ao mesmo período do mês anterior</small>';
+    const good = goodUp ? d >= 0 : d <= 0;
     return `<small class="${good ? 'pos' : 'neg'}">${d >= 0 ? '▲' : '▼'} ${eur(Math.abs(d))} vs. mesmo período do mês anterior</small>`;
   };
   // efeito de um movimento no disponível: transferências para/da Poupança ou Investimento também contam
@@ -309,31 +289,22 @@ function home() {
   const fc = spendable() + up.reduce((s, u) => s + spendFx(u.rec), 0) + sched.reduce((s, e) => s + spendFx(e), 0);
   const budgetLeft = db.budgets.reduce((s, b) => s + Math.max(b.limit - sumEntries('expense', ym, b.category), 0), 0);
   const al = alerts().slice(0, 5);
-  const pts = monthEnds(6).map(m => ({ label: monthName(m.k), v: db.accounts.reduce((s, a) => s + a.opening, 0) + db.entries.filter(e => e.date <= m.end && e.kind !== 'transfer').reduce((s, e) => s + (e.kind === 'income' ? e.amount : -e.amount), 0) }));
-  const ms = monthEnds(6).map(m => ({ label: monthName(m.k), inc: sumEntries('income', m.k), exp: sumEntries('expense', m.k) }));
-  const cats = Object.keys(CATS).map(c => [c, sumEntries('expense', ym, c)]).filter(c => c[1] > 0).sort((a, b) => b[1] - a[1]);
   const last = byDate(db.entries).slice(0, 5);
+  // no modo privado também se esconde a taxa de poupança (diz quanto se gasta do que se recebe)
+  const taxa = rate === null ? '-' : masked() ? '••••' : pct(rate);
 
-  return `<div class="hero"><small>DISPONÍVEL PARA GASTAR</small><b>${eur(spendable())}</b><div>Património líquido: <strong>${eur(netWorth())}</strong></div></div>
-  ${db.accounts.length ? `<div class="card qa"><div class="qarow"><input id="qa" aria-label="Registo rápido" placeholder="Registo rápido: 12,50 café" enterkeyhint="done" autocomplete="off"><button class="btn main" data-act="qa">Registar</button></div><div class="sub" style="margin-top:6px">Ex.: «gastei 30 no supermercado», «recebi 1500 salário», «transferi 100 para Poupança». Confirmas antes de guardar.</div></div>` : ''}
-  ${db.accounts.length ? `<div class="row2"><button class="btn main" data-quick="expense">- Adicionar despesa</button><button class="btn main alt" data-quick="income">+ Adicionar receita</button></div>` : ''}
-  <div class="row2" style="margin-top:12px">
-    <div class="card metric"><span class="pos">↙</span><small>Receitas de ${monthName(ym)}</small><b>${eur(inc)}</b>${delta(inc, pInc, true)}</div>
-    <div class="card metric"><span style="color:var(--orange)">↗</span><small>Despesas de ${monthName(ym)}</small><b>${eur(exp)}</b>${delta(exp, pExp, false)}</div>
-  </div>
-  <div class="card"><div class="between"><b>Taxa de poupança</b><b class="${rate !== null && rate < 0 ? 'neg' : 'pos'}">${rate === null ? '-' : pct(rate)}</b></div>${rate === null ? '' : bar(rate / 100, rate < 0 ? 'over' : '')}
-    <div class="sub">${rate === null ? 'Regista uma receita este mês para calcular.' : `Este mês poupaste ${eur(inc - exp)} de ${eur(inc)} recebidos.`}</div></div>
+  return `<div class="hero"><small>DISPONÍVEL PARA GASTAR</small><b>${eur(spendable())}</b><div>Poupança: <strong>${eur(savingsTotal())}</strong> · Património líquido: <strong>${eur(netWorth())}</strong></div></div>
+  ${al.map(([t, m]) => `<div class="alert ${t}">${m}</div>`).join('')}
+  ${db.accounts.length ? `<div class="card qa"><div class="qarow"><input id="qa" aria-label="Registo rápido" placeholder="Registo rápido: 12,50 café" enterkeyhint="done" autocomplete="off"><button class="btn main" data-act="qa">Registar</button></div><div class="sub" style="margin-top:6px">Ex.: «gastei 30 no supermercado», «recebi 1500 salário». Confirmas antes de guardar.</div></div>` : ''}
+  <div class="card mes"><div class="mgrid">
+    <div><small class="lbl"><span class="pos" aria-hidden="true">↙</span> Receitas de ${monthName(ym)}</small><b>${eur(inc)}</b>${delta(inc, pInc, true)}</div>
+    <div><small class="lbl"><span style="color:var(--orange)" aria-hidden="true">↗</span> Despesas de ${monthName(ym)}</small><b>${eur(exp)}</b>${delta(exp, pExp, false)}</div>
+  </div><div class="mdiv"><div class="between"><b>Taxa de poupança</b><b class="${rate !== null && rate < 0 ? 'neg' : 'pos'}">${taxa}</b></div>${rate === null || masked() ? '' : bar(rate / 100, rate < 0 ? 'over' : '')}
+    <div class="sub">${rate === null ? 'Regista uma receita este mês para calcular.' : `Este mês poupaste ${eur(inc - exp)} de ${eur(inc)} recebidos.`}</div></div></div>
   <div class="card"><div class="between"><b>Previsão do saldo no fim do mês</b><b>${eur(fc)}</b></div>
     <div class="sub">Saldo atual + recorrentes e movimentos agendados até ${fmtDate(monthEnd())}${up.length + sched.length ? ` (${up.length + sched.length} movimento${up.length + sched.length > 1 ? 's' : ''})` : ''}.</div>
     ${db.budgets.length ? `<div class="sub" style="margin-top:6px">Ainda tens <strong>${eur(budgetLeft)}</strong> por gastar nos orçamentos deste mês.</div>` : ''}</div>
-  ${al.length ? `<h2>Alertas</h2>${al.map(([t, m]) => `<div class="alert ${t}">${m}</div>`).join('')}` : ''}
-  <h2>Património</h2>
-  <div class="card kv"><div><span>Disponível</span><b>${eur(spendable())}</b></div><div><span>Poupança</span><b>${eur(savingsTotal())}</b></div><div><span>Investido</span><b>${eur(investedAccounts() + assets())}</b></div><div><span>Dívidas</span><b class="${debts() ? 'neg' : ''}">${debts() ? '-' : ''}${eur(debts())}</b></div><div class="tot"><span>Património líquido</span><b>${eur(netWorth())}</b></div></div>
-  <h2>Evolução do saldo</h2><div class="card">${db.entries.length || db.accounts.length ? lineChart(pts) : '<p class="sub">Sem dados ainda.</p>'}</div>
   ${db.accounts.length ? '<button class="item linkcard" data-act="open-analysis"><div class="ico">📈</div><div class="grow"><div>Ver análise completa</div><div class="sub">Saldo dia a dia, receitas, despesas e categorias</div></div><span aria-hidden="true">›</span></button>' : ''}
-  <h2>Receitas vs. despesas</h2><div class="card">${groupedBars(ms)}</div>
-  <h2>Despesas por categoria</h2>
-  <div class="card">${cats.length ? cats.map(([c, v]) => `<div class="catrow"><span>${CATS[c][1]} ${CATS[c][0]}</span><span class="sub">${eur(v)} · ${Math.round((v / exp) * 100)}%</span></div>${bar(v / cats[0][1])}`).join('') : '<p class="sub">Ainda não há despesas este mês.</p>'}</div>
   ${db.goals.length ? `<h2>Objetivos</h2><div class="card">${db.goals.slice(0, 3).map(g => { const i = goalInfo(g); return `<div class="catrow"><span>${esc(g.name)}</span><span class="sub">${Math.floor(i.p * 100)}%</span></div>${bar(i.p)}`; }).join('')}</div>` : ''}
   <h2>As minhas contas</h2>${db.accounts.length ? `<div class="list">${db.accounts.map(a => `<div class="item"><div class="ico">${KINDS[a.kind][1]}</div><div class="grow"><div>${esc(a.name)}</div><div class="sub">${KINDS[a.kind][0]}</div></div><div class="amt">${eur(balance(a))}</div></div>`).join('')}</div>` : emptyBox('🏦', 'Começa por adicionar uma conta no separador Contas, com o saldo do banco ou dinheiro.')}
   <h2>Últimos movimentos</h2>${last.length ? `<div class="list">${last.map(entryRow).join('')}</div>` : '<p class="note">Ainda não há movimentos.</p>'}`;
@@ -348,21 +319,34 @@ function filtered() {
       || (numQ && [String(e.amount).replace('.', ','), e.amount.toFixed(2).replace('.', ',')].some(a => a.includes(qn)))));
 }
 function entriesList() {
-  const l = filtered(), T = today(), past = l.filter(e => e.date <= T), future = l.length - past.length; // os agendados não entram nos totais
-  const inc = past.filter(e => e.kind === 'income').reduce((s, e) => s + e.amount, 0), exp = past.filter(e => e.kind === 'expense').reduce((s, e) => s + e.amount, 0);
+  const l = filtered(), T = today(), f = ui.f, comFiltro = !!(f.month || f.cat || f.acc || f.q.trim());
   if (!l.length) return emptyBox('🔍', db.entries.length ? 'Nenhum movimento com estes filtros.' : 'Ainda não há movimentos. Toca em + para registar.');
-  return `<div class="card kv"><div><span>Receitas</span><b class="pos">${eur(inc)}</b></div><div><span>Despesas</span><b>${eur(exp)}</b></div><div><span>Resultado</span><b class="${inc - exp < 0 ? 'neg' : 'pos'}">${eur(inc - exp)}</b></div></div>
-  <div class="list">${l.map(entryRow).join('')}</div><p class="note">Toca num movimento para o editar ou apagar. 🔁 = criado por uma regra recorrente.${future ? ` ${future} movimento(s) agendado(s) (data futura) não entram nos totais.` : ''}</p>`;
+  // os agendados (data futura) não entram nos totais
+  const soma = (xs, k) => xs.filter(e => e.kind === k && e.date <= T).reduce((s, e) => s + cents(e.amount), 0) / 100;
+  const future = l.filter(e => e.date > T).length, inc = soma(l, 'income'), exp = soma(l, 'expense');
+  // totais gerais só com filtros (sem filtros, cada mês mostra os seus)
+  const totais = comFiltro ? `<div class="card kv"><div><span>Receitas</span><b class="pos">${eur(inc)}</b></div><div><span>Despesas</span><b>${eur(exp)}</b></div><div><span>Resultado</span><b class="${inc - exp < 0 ? 'neg' : 'pos'}">${eur(inc - exp)}</b></div></div>` : '';
+  const meses = [];
+  for (const e of l) { const k = e.date.slice(0, 7); if (!meses.length || meses[meses.length - 1].k !== k) meses.push({ k, xs: [] }); meses[meses.length - 1].xs.push(e); }
+  const resumo = xs => {
+    if (xs.every(e => e.date > T)) return 'agendado';
+    const i = soma(xs, 'income'), d = soma(xs, 'expense');
+    return [i ? `<span class="pos">+${eur(i)}</span>` : '', d ? `-${eur(d)}` : ''].filter(Boolean).join(' · ') || 'só transferências';
+  };
+  return `${totais}${meses.map(m => `<h2 class="mhead"><span>${monthName(m.k, true)}</span><span class="sub">${resumo(m.xs)}</span></h2><div class="list">${m.xs.map(entryRow).join('')}</div>`).join('')}
+  <p class="note">Toca num movimento para o editar ou apagar. 🔁 = criado por uma regra recorrente.${future ? ` ${future} movimento(s) agendado(s) (data futura) não entram nos totais.` : ''}</p>`;
 }
 function entries() {
   if (!db.accounts.length) return emptyBox('⇄', 'Adiciona primeiro uma conta no separador Contas.');
   const vseg = `<div class="seg" id="vseg" role="group" aria-label="Vista" style="margin-bottom:12px">${[['list', 'Movimentos'], ['analysis', 'Análise']].map(([k, l]) => `<button data-view="${k}" class="${ui.view === k ? 'on' : ''}" aria-pressed="${ui.view === k}">${l}</button>`).join('')}</div>`;
   if (ui.view === 'analysis') return vseg + (typeof analysisView === 'function' ? analysisView() : '<p class="note">Falta o ficheiro analise.js. Carrega-o junto com os restantes ficheiros da app.</p>');
-  const months = [...new Set([curMonth(), ...db.entries.map(e => e.date.slice(0, 7))])].sort().reverse(), f = ui.f;
+  const months = [...new Set([curMonth(), ...db.entries.map(e => e.date.slice(0, 7))])].sort().reverse(), f = ui.f, ativo = !!(f.month || f.cat || f.acc || f.q.trim());
+  const curto = m => new Date(+m.slice(0, 4), +m.slice(5, 7) - 1, 1).toLocaleDateString('pt-PT', { month: 'short', year: 'numeric' });
   return vseg + `<input id="q" type="search" aria-label="Pesquisar movimentos" placeholder="🔍 Pesquisar por descrição, valor ou categoria" value="${esc(f.q)}">
-  <div class="filters"><select data-f="month" aria-label="Filtrar por mês"><option value="">Todos os meses</option>${months.map(m => `<option value="${m}" ${f.month === m ? 'selected' : ''}>${monthName(m, true)}</option>`).join('')}</select>
-  <select data-f="cat" aria-label="Filtrar por categoria"><option value="">Todas as categorias</option>${opts(CATS, f.cat)}</select>
-  <select data-f="acc" aria-label="Filtrar por conta"><option value="">Todas as contas</option>${accOpts(f.acc)}</select></div>
+  <div class="filters"><select data-f="month" aria-label="Filtrar por mês" class="${f.month ? 'on' : ''}"><option value="">Mês</option>${months.map(m => `<option value="${m}" ${f.month === m ? 'selected' : ''}>${curto(m)}</option>`).join('')}</select>
+  <select data-f="cat" aria-label="Filtrar por categoria" class="${f.cat ? 'on' : ''}"><option value="">Categoria</option>${opts(CATS, f.cat)}</select>
+  <select data-f="acc" aria-label="Filtrar por conta" class="${f.acc ? 'on' : ''}"><option value="">Conta</option>${accOpts(f.acc)}</select></div>
+  ${ativo ? '<button class="linkbtn fclear" data-act="clear-filters">✕ Limpar filtros</button>' : ''}
   <div id="elist">${entriesList()}</div>`;
 }
 
@@ -372,7 +356,7 @@ function budgets() {
   if (!db.budgets.length) {
     return `${emptyBox('📊', 'Define limites mensais por categoria e recebe alertas aos 80% e 100%.')}<button class="btn main" data-act="new">Criar o primeiro orçamento</button>`;
   }
-  const tot = db.budgets.reduce((s, b) => s + b.limit, 0), totSpent = db.budgets.reduce((s, b) => s + sumEntries('expense', ym, b.category), 0);
+  const tot = db.budgets.reduce((s, b) => s + cents(b.limit), 0) / 100, totSpent = db.budgets.reduce((s, b) => s + cents(sumEntries('expense', ym, b.category)), 0) / 100;
   return `<div class="card"><div class="between"><b>Total em ${monthName(ym, true)}</b><span class="sub">${eur(totSpent)} / ${eur(tot)}</span></div>${bar(totSpent / Math.max(tot, .01), totSpent >= tot ? 'over' : totSpent >= tot * 0.8 ? 'warn' : '')}${totSpent >= tot * 0.8 ? `<div class="sub ${totSpent >= tot ? 'neg' : 'warnt'}">${pctOf(totSpent / Math.max(tot, .01))}% · ${totSpent >= tot ? 'Excedido' : 'Atenção'}</div>` : ''}</div>
   <div class="list">${db.budgets.map(b => {
     const s = sumEntries('expense', ym, b.category), p = s / Math.max(b.limit, .01), ps = sumEntries('expense', prev, b.category);
@@ -389,34 +373,50 @@ function goals() {
   }
   return db.goals.map(g => {
     const i = goalInfo(g);
-    return `<div class="card"><div class="between"><b data-edit-goal="${g.id}" class="link">${esc(g.name)} ✎</b><span class="pos">${Math.floor(i.p * 100)}%</span></div>${bar(i.p)}
-    <div class="kv2"><div><span>Pretendido</span><b>${eur(g.target)}</b></div><div><span>Já poupado</span><b>${eur(i.saved)}</b></div><div><span>Falta poupar</span><b>${eur(i.remaining)}</b></div>
-    <div><span>Prazo</span><b>${g.deadline ? fmtDate(g.deadline) : '-'}</b></div></div>
-    ${i.need !== null && i.remaining > 0 ? `<div class="sub">Poupança mensal necessária: <strong>${eur(i.need)}</strong></div>` : ''}
-    ${i.status ? `<div class="${i.tone}" style="font-weight:600;margin-top:4px">${i.status}</div>` : ''}
-    ${i.contrib ? `<div class="sub">Movimentos associados: ${i.contrib < 0 ? '-' : '+'}${eur(Math.abs(i.contrib))}</div>` : ''}
-    <div class="step"><button data-goal-step="${g.id}" data-d="-10">-</button><span>Ajuste manual (±10 €)</span><button data-goal-step="${g.id}" data-d="10">+</button></div></div>`;
-  }).join('') + '<p class="note">Uma transferência associada soma ao objetivo; uma despesa associada retira. O progresso atualiza sozinho.</p>';
+    const falta = i.remaining > 0 ? `Faltam ${eur(i.remaining)}${g.deadline ? ` até ${fmtDate(g.deadline)}` : ''}${i.need !== null ? ` · Poupança mensal necessária: <strong>${eur(i.need)}</strong>` : ''}` : '';
+    return `<div class="card goal" data-goal-card="${g.id}"><div class="between"><button type="button" class="link goalname" data-edit-goal="${g.id}">${esc(g.name)} ✎</button><span class="pos">${Math.floor(i.p * 100)}%</span></div>${bar(i.p)}
+    <div class="gline">Já poupado <b>${eur(i.saved)}</b> de ${eur(g.target)}</div>
+    ${falta ? `<div class="gline sub">${falta}</div>` : ''}
+    <div class="gfoot"><span class="${i.tone}" style="font-weight:600">${i.status}</span><button class="btn gadd" data-goal-add="${g.id}" aria-label="Juntar dinheiro ao objetivo ${esc(g.name)}">+ Juntar dinheiro</button></div></div>`;
+  }).join('') + '<p class="note">Toca num objetivo para o editar. «Juntar dinheiro» regista uma transferência associada ao objetivo, que soma ao que já tens; uma despesa associada retira.</p>';
+}
+// «Juntar dinheiro»: abre um movimento de transferência já associado ao objetivo (o dinheiro muda mesmo de conta).
+function juntarObjetivo(gid) {
+  if (!db.accounts.length) return toast('Adiciona primeiro uma conta.');
+  const lastId = (() => { try { return localStorage.getItem('poupanca-lastacc'); } catch (e) { return null; } })();
+  const dest = db.accounts.find(a => a.kind === 'poupanca');
+  const orig = [acc(lastId), ...db.accounts].find(a => a && a.id !== dest?.id && a.kind !== 'poupanca' && a.kind !== 'investimento') || db.accounts.find(a => a.id !== dest?.id) || db.accounts[0];
+  entryForm(null, 'transfer', { kind: 'transfer', accountId: orig.id, destId: dest && dest.id !== orig.id ? dest.id : '', goalId: gid, note: '' });
 }
 
 // --- Contas / Recorrentes / Investimentos ---
 function accounts() {
-  const seg = `<div class="seg" id="aseg">${[['accounts', 'Contas'], ['rec', 'Recorrentes'], ['inv', 'Património']].map(([k, l]) => `<button data-seg="${k}" class="${ui.seg === k ? 'on' : ''}">${l}</button>`).join('')}</div><div style="height:12px"></div>`;
+  const seg = `<div class="seg" id="aseg">${[['accounts', 'Contas'], ['rec', 'Recorrentes'], ['inv', 'Património']].map(([k, l]) => `<button data-seg="${k}" class="${ui.seg === k ? 'on' : ''}" aria-pressed="${ui.seg === k}">${l}</button>`).join('')}</div><div style="height:12px"></div>`;
   if (ui.seg === 'rec') return seg + recurringView();
   if (ui.seg === 'inv') return seg + investView();
   const list = db.accounts.length
     ? `<div class="list">${db.accounts.map(a => `<button class="item" data-edit-account="${a.id}"><div class="ico">${KINDS[a.kind][1]}</div><div class="grow"><div>${esc(a.name)}</div><div class="sub">${KINDS[a.kind][0]}</div></div><div class="amt">${eur(balance(a))}</div></button>`).join('')}</div>`
     : emptyBox('💳', 'Toca em + para adicionar a primeira conta.');
-  return `${seg}${list}<p class="note">Ao criar uma conta, escreve o saldo que tens hoje; depois o saldo muda com os movimentos. Para o acertar, edita o «saldo inicial» da conta (isto também muda o histórico). Transferências entre contas não contam como despesa. Toca numa conta para ver o histórico.</p>
-  <h2>Cópia de segurança</h2><div class="card"><p class="sub" style="margin-top:0">Os dados ficam só neste telemóvel. Exporta uma cópia todos os meses e guarda o ficheiro num sítio seguro fora da app (iCloud ou Ficheiros no iPhone, Google Drive ou Ficheiros no Android).</p>
-  <div class="alert ${backupStatus().tone}" style="margin:8px 0 0">${backupStatus().icon} ${backupStatus().text}</div>
-  <div class="btns" style="margin-top:8px"><button class="btn" data-act="export">Exportar</button><button class="btn" data-act="import">Importar</button></div>${(() => { try { return localStorage.getItem(UNDOKEY) ? '<button class="btn" data-act="undo-import" style="width:100%;margin-top:8px">Desfazer a última importação</button>' : ''; } catch (e) { return ''; } })()}</div><input id="file" type="file" accept=".json,application/json" hidden>
-  <h2>Segurança</h2><div class="card"><div class="between" style="margin-bottom:10px"><div><b>Modo privado</b><div class="sub">Esconde os valores (••••). Mantém o dedo premido no 👁️ para os ver; ao largares, escondem-se logo.</div></div><button class="btn ${privacyOn() ? 'main' : ''}" data-act="privacy" style="flex:none;padding:8px 14px">${privacyOn() ? 'Ligado' : 'Desligado'}</button></div>
-  <div style="border-top:1px solid var(--line);padding-top:10px"></div><p class="sub" style="margin-top:0">${getPin() ? '🔒 PIN ativo. A app bloqueia ao abrir e depois de 30 segundos fora dela.' : 'Protege a app com um PIN de 6 dígitos. É um bloqueio de ecrã: impede que outra pessoa abra a app no teu telemóvel.'}</p>
-  <div class="btns" style="margin-top:8px">${getPin() ? '<button class="btn" data-act="pin-change">Alterar PIN</button><button class="btn del" data-act="pin-remove">Remover PIN</button>' : '<button class="btn main" data-act="pin-set">Definir PIN</button>'}</div></div>
-  <h2>Ajuda</h2><div class="card"><button class="btn" data-act="welcome" style="width:100%">Ver as boas-vindas e as dicas</button></div>
+  return `${seg}${list}<p class="note">Toca numa conta para a editar ou ver os movimentos. Para acertar o saldo, edita o «saldo inicial» da conta. A cópia de segurança, o modo privado e o PIN estão nas <b>Definições</b> (⚙️, em cima).</p>
   <p class="note" style="text-align:center">Poupança ${VERSION}</p>`;
 }
+// Definições (⚙️): cópia de segurança, segurança e ajuda, fora do separador Contas.
+function settingsForm() {
+  form = { type: 'settings' };
+  const bk = backupStatus(), undo = (() => { try { return !!localStorage.getItem(UNDOKEY); } catch (e) { return false; } })();
+  openSheet(`<h2>Definições</h2>
+  <h3 class="dh">Cópia de segurança</h3><div class="card"><p class="sub" style="margin-top:0">Os dados ficam só neste telemóvel. Exporta uma cópia todos os meses e guarda o ficheiro num sítio seguro fora da app (iCloud ou Ficheiros no iPhone, Google Drive ou Ficheiros no Android).</p>
+  <div class="alert ${bk.tone}" style="margin:8px 0 0">${bk.icon} ${bk.text}</div>
+  <div class="btns" style="margin-top:8px"><button class="btn" data-act="export">Exportar</button><button class="btn" data-act="import">Importar</button></div>${undo ? '<button class="btn" data-act="undo-import" style="width:100%;margin-top:8px">Desfazer a última importação</button>' : ''}</div>
+  <h3 class="dh">Segurança</h3><div class="card"><div class="between" style="margin-bottom:10px"><div><b>Modo privado</b><div class="sub">Esconde os valores (••••). Mantém o dedo premido no 👁️ para os ver; ao largares, escondem-se logo.</div></div><button class="btn ${privacyOn() ? 'main' : ''}" data-act="privacy" style="flex:none;padding:8px 14px">${privacyOn() ? 'Ligado' : 'Desligado'}</button></div>
+  <div style="border-top:1px solid var(--line);padding-top:10px"></div><p class="sub" style="margin-top:0">${getPin() ? '🔒 PIN ativo. A app bloqueia ao abrir e depois de 30 segundos fora dela.' : 'Protege a app com um PIN de 6 dígitos. É um bloqueio de ecrã: impede que outra pessoa abra a app no teu telemóvel.'}</p>
+  <div class="btns" style="margin-top:8px">${getPin() ? '<button class="btn" data-act="pin-change">Alterar PIN</button><button class="btn del" data-act="pin-remove">Remover PIN</button>' : '<button class="btn main" data-act="pin-set">Definir PIN</button>'}</div></div>
+  <h3 class="dh">Ajuda</h3><div class="card"><button class="btn" data-act="welcome" style="width:100%">Ver as boas-vindas e as dicas</button></div>
+  <div class="actionbar"><div class="btns"><button class="btn main" data-act="cancel">Fechar</button></div></div>`);
+}
+// Se as Definições estiverem abertas, volta a desenhá-las (depois de exportar, importar, mudar o PIN, ...).
+const refreshDefs = () => { if (form && form.type === 'settings' && !$('sheet-bg').hidden) settingsForm(); };
+
 function recurringView() {
   // Recorrentes previstas + movimentos agendados (data futura) dos próximos 30 dias: os mesmos que a previsão do Início já conta.
   const prev = upcoming(plusDays(30)).map(u => ({ date: u.date, kind: u.rec.kind, name: u.rec.name, amount: u.rec.amount, tag: '' }));
@@ -528,7 +528,7 @@ function toast(m) {
 }
 const showErr = m => { const e = document.getElementById('err'); if (e) { e.textContent = m; e.scrollIntoView({ block: 'nearest' }); } };
 const buttons = id => `<div class="actionbar"><div id="err" class="formerr"></div><div class="btns">${id ? '<button class="btn del" data-act="delete">Apagar</button>' : ''}<button class="btn" data-act="cancel">Cancelar</button><button class="btn main" data-act="save">Guardar</button></div></div></div>`;
-const val = n => document.querySelector(`#sheet [name=${n}]`).value;
+const val = n => document.querySelector(`#sheet [name=${n}]`)?.value ?? ''; // campo que não existe (ex.: objetivo sem objetivos) = vazio
 let form = null;
 
 function accountForm(id) {
@@ -545,22 +545,23 @@ function entryForm(id, preset, prefill) {
   const k = e?.kind || preset || 'expense';
   openSheet(`<h2>${id ? 'Editar movimento' : 'Novo movimento'}</h2>${entryFields(e, k)}${buttons(id)}`);
   form.kind = k; syncKind();
+  if (!id && !(prefill && prefill.amount)) $('sheet').querySelector('[name=amount]').focus(); // abre logo o teclado
 }
 function entryFields(e, k, withRec) {
-  return `<div class="seg" id="kseg">${Object.entries(ENTRY).map(([key, l]) => `<button data-kind="${key}" class="${key === k ? 'on' : ''}">${l}</button>`).join('')}</div>
+  return `<div class="seg" id="kseg">${Object.entries(ENTRY).map(([key, l]) => `<button data-kind="${key}" class="${key === k ? 'on' : ''}" aria-pressed="${key === k}">${l}</button>`).join('')}</div>
   ${withRec ? `<label>Nome</label><input name="name" placeholder="ex.: Ginásio" value="${e ? esc(e.name) : ''}">` : ''}
-  <label>Valor em €</label><input name="amount" inputmode="decimal" value="${e ? num(e.amount) : ''}">
+  <label>Valor em €</label><input name="amount" inputmode="decimal" value="${e && e.amount != null ? num(e.amount) : ''}">
   <label>Conta</label><select name="account">${accOpts(e?.accountId || db.accounts[0]?.id)}</select>
   <div id="dest"><label>Conta de destino</label><select name="dest">${accOpts(e?.destId, true)}</select></div>
   <div id="cat"><label>Categoria</label><select name="category">${opts(CATS, e?.category || 'outros')}</select></div>
-  <div id="goal"><label id="goallabel">Associar a um objetivo (opcional)</label><select name="goal">${goalOpts(e?.goalId)}</select></div>
+  ${db.goals.length ? `<div id="goal"><label id="goallabel">Juntar a um objetivo (opcional)</label><select name="goal">${goalOpts(e?.goalId)}</select></div>` : ''}
   ${withRec ? '' : `<label>Descrição / notas (opcional)</label><input name="note" value="${e ? esc(e.note || '') : ''}">`}
-  <label>${withRec ? 'Primeira data' : 'Data'}</label><input name="date" type="date" value="${e?.date || e?.next || today()}">`;
+  <label>${withRec ? 'Primeira data' : 'Data'}</label><input name="date" type="date" min="1900-01-01" max="2200-12-31" value="${e?.date || e?.next || today()}">`;
 }
 function syncKind() {
-  $('dest').hidden = form.kind !== 'transfer'; $('cat').hidden = form.kind !== 'expense'; $('goal').hidden = form.kind === 'income';
-  $('goallabel').textContent = form.kind === 'expense' ? 'Retirar de um objetivo (opcional): a despesa desconta ao objetivo' : 'Associar a um objetivo (opcional): a transferência soma ao objetivo';
-  document.querySelectorAll('#kseg button').forEach(b => b.classList.toggle('on', b.dataset.kind === form.kind));
+  $('dest').hidden = form.kind !== 'transfer'; $('cat').hidden = form.kind !== 'expense';
+  if ($('goal')) { $('goal').hidden = form.kind === 'income'; $('goallabel').textContent = form.kind === 'expense' ? 'Retirar de um objetivo (opcional)' : 'Juntar a um objetivo (opcional)'; }
+  document.querySelectorAll('#kseg button').forEach(b => { b.classList.toggle('on', b.dataset.kind === form.kind); b.setAttribute('aria-pressed', String(b.dataset.kind === form.kind)); });
 }
 function budgetForm(id) {
   const b = id ? db.budgets.find(x => x.id === id) : null; form = { type: 'budget', id };
@@ -572,8 +573,8 @@ function goalForm(id) {
   openSheet(`<h2>${g ? 'Editar objetivo' : 'Novo objetivo'}</h2><label>Objetivo</label><input name="name" placeholder="ex.: Viagem" value="${g ? esc(g.name) : ''}">
   <label>Valor pretendido em €</label><input name="target" inputmode="decimal" value="${g ? num(g.target) : ''}">
   <label>Já tenho poupado (à mão) em €</label><input name="saved" inputmode="decimal" placeholder="0" value="${g ? num(g.saved) : ''}">
-  ${g && goalInfo(g).contrib ? `<p class="note" style="margin:4px 4px 0">Além deste valor, há <b>${goalInfo(g).contrib < 0 ? '-' : '+'}${fmtEur.format(Math.abs(goalInfo(g).contrib)).replace(/−/g, '-')}</b> de movimentos associados ao objetivo (por isso o cartão mostra ${fmtEur.format(goalInfo(g).saved)}). Aqui só editas o que poupaste à mão.</p>` : ''}
-  <label>Prazo (opcional)</label><input name="deadline" type="date" value="${g?.deadline || ''}">${buttons(id)}`);
+  ${g && goalInfo(g).contrib ? `<p class="note" style="margin:4px 4px 0">Além deste valor, há <b>${goalInfo(g).contrib < 0 ? '-' : '+'}${eur(Math.abs(goalInfo(g).contrib))}</b> de movimentos associados ao objetivo (por isso o cartão mostra ${eur(goalInfo(g).saved)}). Aqui só editas o que poupaste à mão.</p>` : ''}
+  <label>Prazo (opcional)</label><input name="deadline" type="date" min="1900-01-01" max="2200-12-31" value="${g?.deadline || ''}">${buttons(id)}`);
 }
 function recForm(id) {
   const r = id ? db.recurring.find(x => x.id === id) : null; form = { type: 'rec', id };
@@ -617,7 +618,7 @@ function saveForm() {
     if (!amount) return showErr(msgValor(val('amount'), 'valor'));
     if (isRec && !val('name').trim()) return showErr('Indica um nome.');
     if (kind === 'transfer' && (!val('dest') || val('dest') === val('account'))) return showErr('Escolhe uma conta de destino diferente da conta de origem.');
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(val('date'))) return showErr('Indica uma data válida.');
+    if (!dataValida(val('date'))) return showErr('Indica uma data válida (confirma o ano: tem de estar entre 1900 e 2200).');
     const base = { kind, amount, accountId: val('account'), destId: kind === 'transfer' ? val('dest') : null, category: kind === 'expense' ? val('category') : 'outros', goalId: kind !== 'income' && val('goal') ? val('goal') : null };
     if (isRec) {
       const next = val('date') || today(), r = { id: id || uid(), name: val('name').trim(), ...base, freq: val('freq'), next, day: +next.slice(8, 10), active: val('active') === '1' };
@@ -639,6 +640,7 @@ function saveForm() {
   } else if (type === 'goal') {
     const name = val('name').trim(), target = parseMoney(val('target')), saved = optMoney(val('saved'));
     if (!name || !target || saved === null) return showErr('Preenche o nome e o valor pretendido (maior que zero). Os outros campos aceitam números como 120,50.');
+    if (val('deadline') && !dataValida(val('deadline'))) return showErr('O prazo tem de ser uma data entre 1900 e 2200 (confirma o ano), ou ficar vazio.');
     // O valor poupado à mão guarda-se como foi escrito: não se corta ao valor pretendido (baixar o alvo e voltar a subir não pode fazer perder dinheiro).
     const old = id ? db.goals.find(x => x.id === id) : null, s = saved;
     const g = { id: id || uid(), name, target, saved: s, deadline: val('deadline'), created: old?.created || today(), base: old ? old.base : s };
@@ -701,11 +703,12 @@ function importData(file) {
     let d;
     try { d = normalize(parsed); } catch (e) { return toast('Ficheiro inválido ou com dados que a app não percebe.'); }
     const fixes = normFixes;
-    if (!confirm(`Importar ${d.accounts.length} conta(s), ${d.entries.length} movimento(s), ${d.budgets.length} orçamento(s) e ${d.goals.length} objetivo(s)? Isto substitui os dados atuais (podes desfazer a seguir em Contas).${fixes ? `\n\nAtenção: ${fixes} data(s) impossíveis (ex.: 30/02) serão corrigidas: o dia passa ao último dia do mês, ou a hoje se o resto da data não fizer sentido.` : ''}`)) return;
+    if (!confirm(`Importar ${d.accounts.length} conta(s), ${d.entries.length} movimento(s), ${d.budgets.length} orçamento(s) e ${d.goals.length} objetivo(s)? Isto substitui os dados atuais (podes desfazer a seguir nas Definições).${fixes ? `\n\nAtenção: ${fixes} data(s) impossíveis (ex.: 30/02) serão corrigidas: o dia passa ao último dia do mês, ou a hoje se o resto da data não fizer sentido.` : ''}`)) return;
     const prevDb = db;
     if (prevDb.accounts.length || prevDb.entries.length || prevDb.goals.length) { try { localStorage.setItem(UNDOKEY, JSON.stringify(prevDb)); } catch (e) {} }
     db = d;
     try { render(true); save(); applyRecurring(); render(true); } catch (err) { db = prevDb; render(true); return toast('Ficheiro inválido ou com dados que a app não percebe.'); }
+    refreshDefs();
     toast(fixes ? `Cópia importada. ${fixes} data(s) impossíveis foram corrigidas.` : 'Cópia importada.');
   };
   r.readAsText(file);
@@ -714,7 +717,7 @@ function undoImport() {
   let raw = null; try { raw = localStorage.getItem(UNDOKEY); } catch (e) {}
   if (!raw) return;
   if (!confirm('Repor os dados que tinhas antes da última importação? Os dados atuais serão substituídos.')) return;
-  try { db = normalize(JSON.parse(raw)); localStorage.removeItem(UNDOKEY); save(); render(true); toast('Dados anteriores repostos.'); } catch (e) { toast('Não foi possível repor.'); }
+  try { db = normalize(JSON.parse(raw)); localStorage.removeItem(UNDOKEY); save(); render(true); refreshDefs(); toast('Dados anteriores repostos.'); } catch (e) { toast('Não foi possível repor.'); }
 }
 function saveText(name, text) {
   const f = new File([text], name, { type: 'application/json' });
@@ -723,7 +726,7 @@ function saveText(name, text) {
 }
 function corruptNotice() {
   openSheet(`<h2>⚠️ Dados danificados</h2>
-  <p class="sub" style="font-size:15px">Os dados guardados neste telemóvel não puderam ser lidos. <b>Não foram apagados</b>: ficou uma cópia à parte. Exporta-a agora, para a poderes recuperar, e depois podes importar uma cópia de segurança em Contas.</p>
+  <p class="sub" style="font-size:15px">Os dados guardados neste telemóvel não puderam ser lidos. <b>Não foram apagados</b>: ficou uma cópia à parte. Exporta-a agora, para a poderes recuperar, e depois podes importar uma cópia de segurança nas Definições (⚙️).</p>
   <button class="btn main" data-act="export-corrupt" style="width:100%;margin-top:12px">Exportar os dados danificados</button>
   <button class="btn" data-act="welcome-close" style="width:100%;margin:10px 0 calc(env(safe-area-inset-bottom) + 20px)">Continuar com a app vazia</button>`);
 }
@@ -731,23 +734,24 @@ function corruptNotice() {
 // ---------- Eventos ----------
 function go(t) { tab = t; try { localStorage.setItem('poupanca-tab', tab); } catch (e) {} render(); }
 document.addEventListener('click', ev => {
-  const t = ev.target.closest('button, b[data-edit-goal]');
+  const t = ev.target.closest('button, [data-goal-card]');
   if (!t) { if (ev.target.id === 'sheet-bg') closeSheet(); return; }
-  const d = t.dataset, add = () => ({ entries: entryForm, budgets: budgetForm, goals: goalForm, accounts: () => ({ accounts: accountForm, rec: recForm, inv: invForm }[ui.seg])() }[tab])();
+  const d = t.dataset, add = () => ({ home: () => entryForm(), entries: entryForm, budgets: budgetForm, goals: goalForm, accounts: () => ({ accounts: accountForm, rec: recForm, inv: invForm }[ui.seg])() }[tab])();
   if (t.id === 'eye') return;
   if (d.tab) go(d.tab);
   else if (t.id === 'add') add();
-  else if (d.quick) entryForm(null, d.quick);
+  else if (t.id === 'defs') settingsForm();
   else if (d.view) { ui.view = d.view; render(true); }
   else if (d.act === 'open-analysis') { ui.view = 'analysis'; go('entries'); }
   else if (d.seg) { ui.seg = d.seg; render(true); }
   else if (d.editEntry) entryForm(d.editEntry);
   else if (d.editBudget) budgetForm(d.editBudget);
   else if (d.editGoal) goalForm(d.editGoal);
+  else if (d.goalAdd) juntarObjetivo(d.goalAdd);
+  else if (d.goalCard) goalForm(d.goalCard);
   else if (d.editAccount) accountForm(d.editAccount);
   else if (d.editRec) recForm(d.editRec);
   else if (d.editInv) invForm(d.editInv);
-  else if (d.goalStep) { const g = db.goals.find(x => x.id === d.goalStep); g.saved = Math.max(g.saved + Number(d.d), 0); save(); render(true); }
   else if (d.kind) { form.kind = d.kind; syncKind(); }
   else if (d.act === 'new') add();
   else if (d.act === 'cancel') closeSheet();
@@ -755,15 +759,16 @@ document.addEventListener('click', ev => {
   else if (d.act === 'delete') deleteForm();
   else if (d.act === 'history') { ui.f = { month: '', cat: '', acc: form.id, q: '' }; closeSheet(); go('entries'); }
   else if (d.pin) pinKey(d.pin);
-  else if (d.act === 'pin-set') showLock('set1', () => render(true));
-  else if (d.act === 'pin-change') showLock('verify', () => showLock('set1', () => render(true)));
-  else if (d.act === 'pin-remove') showLock('verify', () => { localStorage.removeItem(PINKEY); render(true); });
+  else if (d.act === 'pin-set') showLock('set1', () => { render(true); refreshDefs(); });
+  else if (d.act === 'pin-change') showLock('verify', () => showLock('set1', () => { render(true); refreshDefs(); }));
+  else if (d.act === 'pin-remove') showLock('verify', () => { localStorage.removeItem(PINKEY); render(true); refreshDefs(); });
+  else if (d.act === 'clear-filters') { ui.f = { month: '', cat: '', acc: '', q: '' }; render(true); }
   else if (d.act === 'qa') quickAdd();
   else if (d.act === 'welcome') welcome();
   else if (d.act === 'welcome-close') closeSheet();
   else if (d.act === 'pin-cancel') hideLock();
-  else if (d.act === 'privacy') { try { localStorage.setItem(PRIVKEY, privacyOn() ? '0' : '1'); } catch (e) {} reveal = false; render(true); }
-  else if (d.act === 'pin-forgot') { if (confirm('Esqueceste o PIN? Para entrar tens de apagar TODOS os dados deste telemóvel (só recuperas com uma cópia de segurança). Apagar?')) { [KEY, 'poupanca-v1', PINKEY, LOCKKEY].forEach(k => localStorage.removeItem(k)); location.reload(); } }
+  else if (d.act === 'privacy') { try { localStorage.setItem(PRIVKEY, privacyOn() ? '0' : '1'); } catch (e) {} reveal = false; render(true); refreshDefs(); }
+  else if (d.act === 'pin-forgot') { if (confirm('Esqueceste o PIN? Para entrar tens de apagar TODOS os dados deste telemóvel (só recuperas com uma cópia de segurança). Apagar?')) { Object.keys(localStorage).filter(k => k.startsWith('poupanca') && k !== PRIVKEY && k !== WELCOME_KEY).forEach(k => localStorage.removeItem(k)); location.reload(); } }
   else if (d.act === 'export') exportData();
   else if (d.act === 'export-corrupt') saveText(`poupanca-danificado-${today()}.json`, corruptRaw || '');
   else if (d.act === 'undo-import') undoImport();
@@ -789,7 +794,7 @@ eye.addEventListener('pointerdown', e => { ptrSinceClick = true; e.preventDefaul
 eye.addEventListener('contextmenu', e => e.preventDefault());
 ['pointerup', 'pointercancel', 'touchend', 'touchcancel', 'mouseup'].forEach(t => document.addEventListener(t, () => { if (!assist) setReveal(false); }));
 // O clique que o navegador gera ao largar o dedo/rato não conta. Só o teclado (Enter/Espaço), que não passa por
-// «dedo premido», mostra os valores durante 15 s. Quem usa leitor de ecrã pode desligar o Modo privado em Contas → Segurança.
+// «dedo premido», mostra os valores durante 15 s. Quem usa leitor de ecrã pode desligar o Modo privado nas Definições (⚙️).
 eye.addEventListener('click', () => {
   if (ptrSinceClick) { ptrSinceClick = false; return; }
   clearTimeout(assistTimer); assist = !reveal;
@@ -820,9 +825,9 @@ function welcome() {
     : /Android/.test(ua) ? 'No <b>Chrome</b>, toca nos três pontos (⋮) e depois em <b>Instalar aplicação</b>.' : 'Podes instalá-la no telemóvel pelo menu do browser (Adicionar ao ecrã principal).';
   try { localStorage.setItem(WELCOME_KEY, '1'); } catch (e) {}
   openSheet(`<h2>Bem-vindo à Poupança 👋</h2>
-  <div class="wl"><span>🏦</span><div><b>Começa por uma conta.</b> Em <i>Contas</i>, cria uma conta com o saldo atual.</div></div>
+  <div class="wl"><span>🏦</span><div><b>Começa por uma conta.</b> Em <i>Contas</i>, cria uma conta com o saldo que tens hoje; depois o saldo muda com os movimentos. Para o acertar, edita o «saldo inicial» da conta. Transferências entre contas não contam como despesa.</div></div>
   <div class="wl"><span>⚡</span><div><b>Regista depressa.</b> Na página inicial, escreve «12,50 café» e confirma.</div></div>
-  <div class="wl"><span>💾</span><div><b>Os dados ficam só neste telemóvel.</b> Não há servidor nem conta. Se apagares a app ou mudares de telemóvel sem exportar, perdes tudo. Exporta uma cópia todos os meses (Contas → Cópia de segurança).</div></div>
+  <div class="wl"><span>💾</span><div><b>Os dados ficam só neste telemóvel.</b> Não há servidor nem conta. Se apagares a app ou mudares de telemóvel sem exportar, perdes tudo. Exporta uma cópia todos os meses (⚙️ Definições → Cópia de segurança).</div></div>
   <div class="wl"><span>👁️</span><div><b>Modo privado.</b> Os valores estão escondidos (••••). Mantém o dedo premido no olho para os ver.</div></div>
   ${install ? `<div class="wl"><span>📲</span><div><b>Instalar.</b> ${install}</div></div>` : ''}
   <div class="wl"><span>⚠️</span><div><b>Uma app pessoal.</b> Não é aconselhamento financeiro nem tem segurança profissional. O PIN só bloqueia o ecrã. Não guardes aqui palavras-passe nem números de cartões.</div></div>

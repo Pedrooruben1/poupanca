@@ -199,3 +199,36 @@ input.sec{-webkit-text-security:disc;text-security:disc}
 .an-fade{animation:anfade .25s ease}
 @keyframes anfade{from{opacity:.4}to{opacity:1}}
 @media(prefers-reduced-motion:reduce){.an-fade{animation:none}}
+
+/* ---- v23: o «Nome ✎» do objetivo é um botão (teclado e leitores de ecrã), com o mesmo aspeto do texto a negrito ---- */
+.goalname{-webkit-appearance:none;appearance:none;border:0;background:none;padding:0;margin:0;font:inherit;font-weight:700;color:inherit;text-align:left;min-width:0}
+
+/* ---- v24: interface mais simples (Início curto, Definições, Movimentos por mês, objetivos compactos) ---- */
+#defs{width:44px;height:44px;border-radius:50%;border:0;background:var(--card);font-size:18px;line-height:1}
+h1{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+@media(max-width:360px){h1{font-size:23px}.hr{gap:6px}}
+.mgrid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px}
+.mgrid>div{min-width:0}
+.mgrid .lbl{display:block;color:var(--sub);font-size:12px;margin-bottom:2px}
+.mgrid b{display:block;font-size:17px;margin:2px 0;overflow-wrap:anywhere}
+.mgrid small:not(.lbl){display:block;font-size:12px}
+.mdiv{border-top:1px solid var(--line);padding-top:10px}
+.filters{grid-template-columns:repeat(3,minmax(0,1fr))}
+.filters select:last-child{grid-column:auto}
+.filters select{padding:10px 8px;text-overflow:ellipsis}
+.filters select.on{border-color:var(--forest);color:var(--forest);font-weight:600}
+.fclear{display:block;margin:-6px auto 6px}
+h2.mhead{display:flex;justify-content:space-between;align-items:baseline;gap:8px;font-size:15px;margin:16px 4px 8px}
+h2.mhead>span:first-child::first-letter{text-transform:uppercase}
+h2.mhead .sub{font-size:13px;font-weight:500;text-align:right}
+#sheet input[name=amount]{font-size:22px;font-weight:600}
+.card.goal{cursor:pointer}
+.gline{font-size:14px;margin:6px 0 0}
+.gfoot{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-top:10px}
+.gfoot .btn{flex:none;padding:8px 14px}
+#sheet h3.dh{text-align:left;font-size:13px;color:var(--sub);text-transform:uppercase;letter-spacing:.04em;margin:18px 4px 8px}
+#sheet h3.dh:first-of-type{margin-top:4px}
+.gfoot .btn{background:var(--bg)}
+/* contraste: o verde sobre o fundo cinzento dos títulos de mês precisa de ser mais escuro (WCAG AA) */
+h2.mhead .pos{color:#146c35}
+@media(prefers-color-scheme:dark){h2.mhead .pos{color:var(--green)}}
