@@ -4,10 +4,13 @@
 const KEY = 'poupanca-v2';
 const KINDS = { ordem: ['Conta à ordem', '🏦'], poupanca: ['Poupança', '🔒'], carteira: ['Dinheiro físico', '💵'], investimento: ['Investimento', '📈'] };
 const ENTRY = { income: 'Receita', expense: 'Despesa', transfer: 'Transferência' };
+// As chaves (habitacao, cafes, ...) são o que fica guardado nos dados: nunca se mudam nem se apagam, só se acrescentam.
 const CATS = {
-  habitacao: ['Habitação', '🏠'], alimentacao: ['Alimentação', '🍔'], restaurantes: ['Restaurantes', '🍽️'], transportes: ['Transportes', '🚗'],
-  compras: ['Compras', '🛒'], desporto: ['Desporto', '🏋️'], viagens: ['Viagens', '✈️'], lazer: ['Lazer', '🍻'], subscricoes: ['Subscrições', '📱'],
-  saude: ['Saúde', '🩺'], investimentos: ['Investimentos', '💰'], outros: ['Outros', '📦'],
+  habitacao: ['Habitação', '🏠'], alimentacao: ['Alimentação', '🍔'], restaurantes: ['Restaurantes', '🍽️'], cafes: ['Cafés e pequenos-almoços', '☕'],
+  transportes: ['Transportes', '🚗'], automovel: ['Automóvel', '⛽'], compras: ['Compras', '🛒'], roupa: ['Roupa e calçado', '👕'],
+  desporto: ['Desporto', '⚽'], ginasio: ['Ginásio', '🏋️'], viagens: ['Viagens', '✈️'], lazer: ['Lazer', '🍻'], subscricoes: ['Subscrições', '📱'],
+  saude: ['Saúde', '🩺'], cabeleireiro: ['Cabeleireiro e estética', '💈'], animais: ['Animais de estimação', '🐶'], educacao: ['Educação e formação', '📚'],
+  presentes: ['Presentes', '🎁'], impostos: ['Impostos e taxas', '💸'], investimentos: ['Investimentos', '💰'], outros: ['Outros', '📦'],
 };
 const FREQ = { monthly: 'Mensal', weekly: 'Semanal', yearly: 'Anual' };
 const INV = { etf: 'ETF', acao: 'Ação', cripto: 'Criptomoeda', deposito: 'Depósito a prazo', aforro: 'Certificado de Aforro', outro: 'Outro investimento', divida: 'Dívida / empréstimo' };
@@ -94,7 +97,7 @@ const own = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
 const cents = x => Math.round(x * 100);
 // As mesmas regras que a app aplica ao abrir os dados (normalize): só datas reais entre 1900 e 2200.
 const dataValida = s => { const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s || ''); if (!m) return false; const y = +m[1], mo = +m[2], d = +m[3]; return y >= 1900 && y <= 2200 && mo >= 1 && mo <= 12 && d >= 1 && d <= new Date(Date.UTC(y, mo, 0)).getUTCDate(); };
-const VERSION = 'v24';
+const VERSION = 'v25';
 const fmtEur = new Intl.NumberFormat('pt-PT', { style: 'currency', currency: 'EUR' });
 // Modo privado: valores escondidos; só aparecem enquanto manténs o dedo premido no olho.
 // Assim, ao sair da app (e o iOS tirar a imagem do seletor de apps) nunca há valores à vista.
@@ -442,17 +445,27 @@ function investView() {
 
 // ---------- Registo rápido por texto (interpretado no telemóvel, nada sai daqui) ----------
 const norm = t => t.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/['’`´]/g, '');
+// Palavras do registo rápido. A ordem conta: a primeira categoria que acerta ganha (ex.: «pequeno almoço» → Cafés antes de «almoço» → Restaurantes).
 const QKEYS = {
-  restaurantes: ['cafe', 'restaurante', 'jantar', 'almoco', 'pizza', 'hamburguer', 'pastelaria', 'snack', 'sushi', 'bifana', 'pequeno almoco', 'lanche', 'gelado', 'cerveja', 'tasca', 'mcdonalds'],
+  cafes: ['cafe', 'pastelaria', 'pequeno almoco', 'lanche', 'galao', 'bica', 'croissant', 'meia de leite'],
+  restaurantes: ['restaurante', 'jantar', 'almoco', 'pizza', 'hamburguer', 'snack', 'sushi', 'bifana', 'gelado', 'cerveja', 'tasca', 'mcdonalds'],
   alimentacao: ['supermercado', 'mercearia', 'talho', 'peixaria', 'mercado', 'lidl', 'continente', 'aldi', 'minipreco', 'pingo doce', 'intermarche', 'padaria', 'fruta', 'compras do mes'],
-  transportes: ['gasolina', 'gasoleo', 'combustivel', 'uber', 'bolt', 'comboio', 'metro', 'autocarro', 'passe', 'portagem', 'portagens', 'via verde', 'estacionamento', 'taxi', 'cp', 'carregamento'],
+  automovel: ['gasolina', 'gasoleo', 'combustivel', 'portagem', 'portagens', 'via verde', 'estacionamento', 'oficina', 'inspecao', 'pneus', 'seguro carro', 'seguro do carro', 'mecanico'],
+  transportes: ['uber', 'bolt', 'comboio', 'metro', 'autocarro', 'passe', 'taxi', 'cp', 'carregamento'],
   habitacao: ['renda', 'condominio', 'luz', 'agua', 'gas', 'internet', 'eletricidade', 'casa', 'ikea', 'obras', 'seguro casa'],
-  desporto: ['ginasio', 'futebol', 'padel', 'treino', 'desporto', 'piscina', 'corrida', 'inscricao', 'bicicleta', 'strava'],
+  ginasio: ['ginasio', 'crossfit', 'fitness', 'personal trainer', 'pilates', 'yoga'],
+  desporto: ['futebol', 'padel', 'treino', 'desporto', 'piscina', 'corrida', 'inscricao', 'bicicleta', 'strava'],
+  cabeleireiro: ['cabeleireiro', 'barbeiro', 'barba', 'cabelo', 'unhas', 'manicure', 'depilacao', 'estetica'],
+  animais: ['veterinario', 'racao', 'cao', 'gato', 'petshop'],
+  educacao: ['curso', 'livro', 'formacao', 'propinas', 'explicacoes', 'certificacao', 'udemy'],
+  impostos: ['imposto', 'irs', 'iuc', 'imi', 'taxa', 'comissao', 'comissoes', 'multa'],
+  presentes: ['presente', 'prenda', 'aniversario', 'natal'],
+  roupa: ['roupa', 'sapatos', 'sapatilhas', 'zara', 'primark', 'calcas', 'casaco'],
   subscricoes: ['netflix', 'spotify', 'subscricao', 'disney', 'hbo', 'youtube', 'icloud', 'prime', 'chatgpt', 'claude', 'telemovel', 'mensalidade'],
   viagens: ['viagem', 'hotel', 'voo', 'aviao', 'booking', 'airbnb', 'ferias', 'hostel', 'ryanair'],
-  lazer: ['cinema', 'bar', 'discoteca', 'jogo', 'jogos', 'concerto', 'lazer', 'festa', 'bilhete', 'livro', 'steam', 'playstation'],
+  lazer: ['cinema', 'bar', 'discoteca', 'jogo', 'jogos', 'concerto', 'lazer', 'festa', 'bilhete', 'steam', 'playstation'],
   saude: ['farmacia', 'medico', 'dentista', 'consulta', 'saude', 'oculista', 'analises', 'medicamentos'],
-  compras: ['zara', 'roupa', 'sapatos', 'amazon', 'aliexpress', 'compras', 'presente', 'prenda', 'worten', 'fnac'],
+  compras: ['amazon', 'aliexpress', 'compras', 'worten', 'fnac'],
   investimentos: ['etf', 'acoes', 'cripto', 'bitcoin', 'investimento'],
 };
 // Raízes dos verbos, para apanhar todas as formas (transferi, transferir, transferência…).
